@@ -1,0 +1,9 @@
+groups:
+  - name: sample
+    rules:
+      - alert: A
+        expr: sample_a > 0
+      - alert: B
+        expr: sample_b > 0
+      - record: sample_a_copy
+        expr: sample_a

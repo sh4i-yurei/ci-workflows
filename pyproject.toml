@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ci-workflows"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["PyYAML==6.0.3", "diff-cover==9.7.2", "unidiff==0.7.5", "jsonyx==2.4.0"]
+
+[project.scripts]
+ci-checks = "ci_workflows.checks:main"
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "pytest-cov==7.1.0"]
+mutation = ["mutmut==3.8.0"]
+
+[tool.mutmut]
+source_paths = ["ci_workflows"]
+pytest_add_cli_args_test_selection = ["tests/test_python_checks.py", "tests/test_python_edges.py", "tests/test_other_languages.py", "tests/test_rules.py", "tests/test_tailnet_mutation.py"]
+also_copy = ["tests/fixtures/alerts", "tests/fixtures/tailscale"]
+cache_invalidation_files = ["tests/*.py"]
+on_dependency_change = "rerun"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["ci_workflows*"]

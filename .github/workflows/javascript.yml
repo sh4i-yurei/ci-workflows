@@ -1,0 +1,71 @@
+name: JavaScript checks
+on:
+  workflow_call:
+    inputs:
+      coverage_floor:
+        required: true
+        type: number
+      install_command:
+        required: true
+        type: string
+      caller_workflow:
+        required: true
+        type: string
+      caller_job:
+        required: true
+        type: string
+      mutation_sources:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
+      - name: Install caller
+        run: bash -e -o pipefail -c "$INSTALL_COMMAND"
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+      - name: Run Node tests with branch coverage
+        run: node --test --experimental-test-coverage --test-coverage-exclude='**/test/**' --test-coverage-exclude='**/tests/**' --test-coverage-exclude='**/*.test.*' --test-coverage-exclude='**/*.spec.*' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage.lcov
+      - name: Check floor ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_FLOOR: ${{ inputs.coverage_floor }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          CALLER_JOB: ${{ inputs.caller_job }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh floor javascript coverage.lcov
+      - name: Check changed lines
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          MUTATION_SOURCES: ${{ inputs.mutation_sources }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh changed javascript coverage.lcov
+      - name: Mutate changed JavaScript
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          MUTATION_SOURCES: ${{ inputs.mutation_sources }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh mutate-javascript

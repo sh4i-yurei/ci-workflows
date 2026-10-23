@@ -1,0 +1,73 @@
+name: PowerShell checks
+on:
+  workflow_call:
+    inputs:
+      coverage_floor:
+        required: true
+        type: number
+      caller_workflow:
+        required: true
+        type: string
+      caller_job:
+        required: true
+        type: string
+      source_path:
+        required: true
+        type: string
+      tests_path:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
+      - name: Install Pester 5
+        shell: pwsh
+        run: Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+      - name: Run Pester with JaCoCo
+        shell: pwsh
+        env:
+          SOURCE_PATH: ${{ inputs.source_path }}
+          TESTS_PATH: ${{ inputs.tests_path }}
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          $config = New-PesterConfiguration
+          $config.Run.Path = $env:TESTS_PATH
+          $config.Run.Exit = $true
+          $config.CodeCoverage.Enabled = $true
+          $config.CodeCoverage.Path = $env:SOURCE_PATH
+          $config.CodeCoverage.OutputFormat = 'CoverageGutters'
+          $config.CodeCoverage.OutputPath = 'coverage-jacoco.xml'
+          Invoke-Pester -Configuration $config
+      - name: Check floor ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_FLOOR: ${{ inputs.coverage_floor }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          CALLER_JOB: ${{ inputs.caller_job }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh floor powershell coverage-jacoco.xml
+      - name: Check changed lines
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SOURCE_PATH: ${{ inputs.source_path }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh changed powershell coverage-jacoco.xml

@@ -1,0 +1,11 @@
+---
+- name: Destroy container instances
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Remove containers
+      containers.podman.podman_container:
+        executable: "{{ lookup('env', 'PODMAN_EXECUTABLE') | default('podman-remote', true) }}"
+        name: "{{ item }}"
+        state: absent
+      loop: "{{ groups['molecule'] }}"

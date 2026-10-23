@@ -1,0 +1,86 @@
+- mutant: ci_workflows.tailnet.xǁValidateClientǁ__init____mutmut_36
+  reason: URL quoting always preserves ASCII letters such as X, regardless of the safe argument.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_8
+  reason: urllib chooses POST when a request body is present, even with method=None.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_12
+  reason: urllib chooses POST when a request body is present and the method argument is omitted.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_16
+  reason: JSON whitespace does not change the parsed policy body used by validation.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_18
+  reason: JSON whitespace does not change the parsed policy body used by validation.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_24
+  reason: HTTP header names are case-insensitive; urllib sends the same authorization header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_25
+  reason: HTTP header names are case-insensitive; urllib sends the same authorization header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_32
+  reason: HTTP header names are case-insensitive; urllib sends the same content-type header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_33
+  reason: HTTP header names are case-insensitive; urllib sends the same content-type header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_89
+  reason: The default status value is only checked for integer type; both 200 and 201 pass.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_38
+  reason: HTTP field names are case-insensitive; urllib sends the same authorization
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_39
+  reason: HTTP field names are case-insensitive; urllib sends the same authorization
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_79
+  reason: HTTP field names are case-insensitive; urllib sends the same content-type
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_63
+  reason: urllib Request uses POST when a request body is present even without an
+    explicit method.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_67
+  reason: urllib Request uses POST when a request body is present even without an
+    explicit method.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_80
+  reason: HTTP field names are case-insensitive; urllib sends the same content-type
+    header.
+- mutant: ci_workflows.tailnet.x__key__mutmut_5
+  reason: ensure_ascii=None is falsey, so json.dumps encodes identically to
+    ensure_ascii=False and the stored content hash is unchanged.
+- mutant: ci_workflows.tailnet.x_policy_cases__mutmut_34
+  reason: The request counter starts at zero and this assignment is its first increment,
+    giving one either way.
+- mutant: ci_workflows.checks.x__normalize_coverage_report__mutmut_98
+  reason: ElementTree accepts encoding="UNICODE" and encoding="unicode" identically,
+    including when it writes a non-ASCII source filename.
+- mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_5
+  reason: A valid LCOV record begins with SF, which replaces the initial hits mapping
+    before any line or branch is processed.
+- mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_6
+  reason: A valid LCOV record begins with SF, which replaces the initial branches
+    mapping before any line or branch is processed.
+- mutant: ci_workflows.checks.x__repository_root__mutmut_3
+  reason: When no Git root exists, passing cwd=None to subprocess.run has the same
+    effect as omitting cwd; both use the current directory.
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_133
+  reason: The changed.lcov filename is only the path of a temporary report passed to
+    diff-cover; the report contents and verdict are identical.
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_134
+  reason: The changed.lcov filename is only the path of a temporary report passed to
+    diff-cover; case does not change the report contents or verdict.
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_175
+  reason: Passing cwd set to the current directory to subprocess.run is equivalent
+    to omitting cwd.
+- mutant: ci_workflows.checks.x_main__mutmut_36
+  reason: The source-root argument is converted to a string and then to Path inside
+    changed_lines, whether argparse initially supplied a Path or a string.
+- mutant: ci_workflows.checks.x_main__mutmut_38
+  reason: The source-root argument is converted to a string and then to Path inside
+    changed_lines, whether argparse initially supplied a Path or a string.
+- mutant: ci_workflows.checks.x_main__mutmut_388
+  reason: When TS_ACCESS_TOKEN is absent, None and the empty string are both falsey
+    and both select federated token retrieval.
+- mutant: ci_workflows.checks.x_main__mutmut_390
+  reason: When TS_ACCESS_TOKEN is absent, the omitted get default and the empty string
+    are both falsey and both select federated token retrieval.
+- mutant: ci_workflows.checks.x_select_functions__mutmut_21
+  reason: The initial generated set is overwritten in mutmut mode and never read in
+    ordinary function-selection mode.
+- mutant: ci_workflows.checks.x_select_functions__mutmut_28
+  reason: Python package metadata lookup canonicalizes distribution names;
+    version("MUTMUT") and version("mutmut") return the same installed version.
+- mutant: ci_workflows.checks.x_select_functions__mutmut_80
+  reason: This passes candidate as the nested owner in ordinary mode, where candidate
+    already equals dotted_name. In mutmut mode the original already passes candidate.

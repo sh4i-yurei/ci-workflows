@@ -1,0 +1,13 @@
+{
+  "name": "javascript-workflow-fixtures",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test covered/test/app.test.js",
+    "test:covered": "node --test covered/test/app.test.js",
+    "test:untested": "node --test untested/test/app.test.js"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "10.0.0"
+  }
+}

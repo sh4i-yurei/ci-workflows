@@ -1,0 +1,24 @@
+---
+- name: Verify
+  hosts: molecule
+  gather_facts: false
+  tasks:
+    - name: Read the unit state
+      ansible.builtin.command: systemctl show sample.service -p ActiveState -p UnitFileState -p User -p MainPID
+      register: sample_unit
+      changed_when: false
+    - name: Parse the properties
+      ansible.builtin.set_fact:
+        sample_props: "{{ dict(sample_unit.stdout_lines | map('split', '=', 1)) }}"
+    - name: Read the running process owner
+      ansible.builtin.command: stat -c %U /proc/{{ sample_props.MainPID }}
+      register: sample_owner
+      changed_when: false
+    - name: Assert the service identity
+      ansible.builtin.assert:
+        that:
+          - sample_props.ActiveState == 'active'
+          - sample_props.UnitFileState == 'enabled'
+          - sample_props.User == 'samplesvc'
+          - sample_props.MainPID | int > 0
+          - sample_owner.stdout == 'samplesvc'
