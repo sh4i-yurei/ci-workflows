@@ -959,6 +959,14 @@ def test_source_paths_prints_own_and_two_folder_configs(tmp_path):
     assert invoke("source-paths", "--config", config) == (0, "hooks\nscripts\n", "")
 
 
+def test_source_paths_requires_config_argument():
+    stderr = io.StringIO()
+    with redirect_stderr(stderr), pytest.raises(SystemExit) as error:
+        main(["source-paths"])
+    assert error.value.code == 2
+    assert "--config" in stderr.getvalue()
+
+
 @pytest.mark.parametrize(
     "config_text",
     [
@@ -1051,6 +1059,17 @@ def test_filter_changed_javascript_sources_from_json_roots(monkeypatch):
         "--extension",
         ".mjs",
     ) == (0, "src/app.js\nlib/util.mjs\n", "")
+
+
+def test_filter_sources_rejects_non_string_json_root(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("src/app.js\n"))
+    assert invoke(
+        "filter-sources", "--roots-json", '["src", 1]', "--extension", ".js"
+    ) == (
+        2,
+        "",
+        "configuration error: mutation source paths must be a non-empty list\n",
+    )
 
 
 def test_filter_colocated_javascript_test_directories(monkeypatch):
