@@ -1,0 +1,4 @@
+{
+  "grants": [{"src": ["tag:S"], "dst": ["tag:D"], "ip": ["tcp:22"]}],
+  "tests": [{"src": "tag:S", "proto": "tcp", "deny": ["tag:other:22"]}]
+}

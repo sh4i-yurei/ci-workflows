@@ -1,0 +1,9 @@
+// One grant, with both assertions and a trailing comma.
+{
+  "grants": [
+    {"src": ["tag:S"], "dst": ["tag:D"], "ip": ["tcp:22"],},
+  ],
+  "tests": [
+    {"src": "tag:S", "proto": "tcp", "accept": ["tag:D:22"], "deny": ["tag:other:22"],},
+  ],
+}

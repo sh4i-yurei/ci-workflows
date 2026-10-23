@@ -1,0 +1,8 @@
+---
+- name: Converge with a wrong runtime user
+  hosts: molecule
+  gather_facts: false
+  roles:
+    - role: sample_service
+      vars:
+        sample_run_user: root

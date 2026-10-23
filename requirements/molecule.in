@@ -1,0 +1,2 @@
+molecule==26.10.0
+ansible-core==2.21.4

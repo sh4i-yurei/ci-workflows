@@ -1,0 +1,21 @@
+name: CI
+on:
+  push: {}
+  pull_request: {}
+permissions:
+  contents: read
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+  checks:
+    uses: ./.github/workflows/python.yml
+    with:
+      coverage_floor: 100
+      coverage_package: ci_workflows
+      install_command: python -m pip install -e '.[test]'
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: checks

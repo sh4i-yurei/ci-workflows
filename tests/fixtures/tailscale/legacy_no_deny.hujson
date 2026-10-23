@@ -1,0 +1,4 @@
+{
+  "acls": [{"action": "accept", "src": ["tag:S"], "dst": ["tag:D:22"]}],
+  "tests": [{"src": "tag:S", "proto": "tcp", "accept": ["tag:D:22"]}]
+}

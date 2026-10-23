@@ -1,0 +1,20 @@
+---
+- name: Create container instances
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create containers
+      containers.podman.podman_container:
+        executable: "{{ lookup('env', 'PODMAN_EXECUTABLE') | default('podman-remote', true) }}"
+        hostname: "{{ item }}"
+        name: "{{ item }}"
+        image: "{{ hostvars[item]['container_image'] }}"
+        command: "{{ hostvars[item]['container_command'] }}"
+        systemd: "{{ hostvars[item]['container_systemd'] }}"
+        state: started
+      loop: "{{ groups['molecule'] }}"
+    - name: Wait for containers
+      ansible.builtin.wait_for_connection:
+        timeout: 30
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['molecule'] }}"

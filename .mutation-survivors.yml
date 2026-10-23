@@ -1,0 +1,44 @@
+- mutant: ci_workflows.tailnet.xǁValidateClientǁ__init____mutmut_36
+  reason: URL quoting always preserves ASCII letters such as X, regardless of the safe argument.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_8
+  reason: urllib chooses POST when a request body is present, even with method=None.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_12
+  reason: urllib chooses POST when a request body is present and the method argument is omitted.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_16
+  reason: JSON whitespace does not change the parsed policy body used by validation.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_18
+  reason: JSON whitespace does not change the parsed policy body used by validation.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_24
+  reason: HTTP header names are case-insensitive; urllib sends the same authorization header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_25
+  reason: HTTP header names are case-insensitive; urllib sends the same authorization header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_32
+  reason: HTTP header names are case-insensitive; urllib sends the same content-type header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_33
+  reason: HTTP header names are case-insensitive; urllib sends the same content-type header.
+- mutant: ci_workflows.tailnet.xǁValidateClientǁpost__mutmut_89
+  reason: The default status value is only checked for integer type; both 200 and 201 pass.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_38
+  reason: HTTP field names are case-insensitive; urllib sends the same authorization
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_39
+  reason: HTTP field names are case-insensitive; urllib sends the same authorization
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_79
+  reason: HTTP field names are case-insensitive; urllib sends the same content-type
+    header.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_63
+  reason: urllib Request uses POST when a request body is present even without an
+    explicit method.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_67
+  reason: urllib Request uses POST when a request body is present even without an
+    explicit method.
+- mutant: ci_workflows.tailnet.x_federated_access_token__mutmut_80
+  reason: HTTP field names are case-insensitive; urllib sends the same content-type
+    header.
+- mutant: ci_workflows.tailnet.x__key__mutmut_5
+  reason: ensure_ascii=None is falsey, so json.dumps encodes identically to
+    ensure_ascii=False and the stored content hash is unchanged.
+- mutant: ci_workflows.tailnet.x_policy_cases__mutmut_34
+  reason: The request counter starts at zero and this assignment is its first increment,
+    giving one either way.

@@ -1,0 +1,25 @@
+# GitHub documents these reusable-workflow identity fields. actionlint 1.7.12
+# has not added them to its job context schema yet.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+paths:
+  ".github/workflows/python.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/molecule.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/javascript.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/shell.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/powershell.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/prometheus.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'
+  ".github/workflows/tailscale.yml":
+    ignore:
+      - '^property "workflow_(repository|sha)" is not defined in object type'

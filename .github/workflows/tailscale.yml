@@ -1,0 +1,42 @@
+name: Tailscale policy checks
+on:
+  workflow_call:
+    inputs:
+      policy_file:
+        required: true
+        type: string
+    secrets:
+      TS_OAUTH_ID:
+        required: true
+      TS_AUDIENCE:
+        required: true
+      TS_TAILNET:
+        required: true
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
+      - name: Check grant cases
+        env:
+          POLICY_FILE: ${{ inputs.policy_file }}
+          TS_OAUTH_ID: ${{ secrets.TS_OAUTH_ID }}
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+          TS_TAILNET: ${{ secrets.TS_TAILNET }}
+        run: python -m ci_workflows policy --file "$POLICY_FILE"

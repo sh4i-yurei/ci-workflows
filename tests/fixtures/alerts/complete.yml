@@ -1,0 +1,27 @@
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: sample_a
+        values: '0 1 0'
+      - series: sample_b
+        values: '0 0 1'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: A
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: A
+        exp_alerts:
+          - exp_labels: {}
+            exp_annotations: {}
+      - eval_time: 0m
+        alertname: B
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: B
+        exp_alerts:
+          - exp_labels: {}
+            exp_annotations: {}

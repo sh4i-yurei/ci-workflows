@@ -1,0 +1,43 @@
+name: Prometheus rule checks
+on:
+  workflow_call:
+    inputs:
+      test_files:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
+      - name: Run promtool rule tests
+        env:
+          TEST_FILES_JSON: ${{ inputs.test_files }}
+        run: |
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' <<< "$TEST_FILES_JSON"
+          mapfile -t test_files < <(jq -r '.[]' <<< "$TEST_FILES_JSON")
+          docker run --rm -v "$PWD:/work:ro" -w /work --entrypoint /bin/promtool docker.io/prom/prometheus:v3.7.3 test rules "${test_files[@]}"
+      - name: Check alert cases
+        env:
+          TEST_FILES_JSON: ${{ inputs.test_files }}
+        run: |
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' <<< "$TEST_FILES_JSON"
+          mapfile -t test_files < <(jq -r '.[]' <<< "$TEST_FILES_JSON")
+          case_args=()
+          for file in "${test_files[@]}"; do case_args+=(--test-file "$file"); done
+          python -m ci_workflows alerts "${case_args[@]}"

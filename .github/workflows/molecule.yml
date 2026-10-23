@@ -1,0 +1,42 @@
+name: Molecule checks
+on:
+  workflow_call:
+    inputs:
+      scenarios:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(inputs.scenarios) }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install Molecule and Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman
+          python -m pip install --constraint .ci-workflows/requirements/molecule-lock.txt 'molecule==26.10.0' 'ansible-core==2.21.4'
+          ansible-galaxy collection install containers.podman:1.21.0
+      - name: Verify rootless Podman
+        run: 'test "$(podman info --format "{{.Host.Security.Rootless}}")" = true'
+      - name: Run caller scenario
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          PODMAN_EXECUTABLE: podman
+        run: molecule test -s "$SCENARIO"

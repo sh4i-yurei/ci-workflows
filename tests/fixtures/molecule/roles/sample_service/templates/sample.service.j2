@@ -1,0 +1,9 @@
+[Unit]
+Description=Molecule sample service
+
+[Service]
+User={{ sample_run_user }}
+ExecStart=/usr/bin/sleep infinity
+
+[Install]
+WantedBy=multi-user.target
