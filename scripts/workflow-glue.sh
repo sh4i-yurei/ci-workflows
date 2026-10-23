@@ -48,6 +48,17 @@ sources() {
   esac
 }
 
+test_python() {
+  local paths_text path
+  local -a paths=() coverage_args=()
+  paths_text=$("$PYTHON" -m ci_workflows source-paths --config pyproject.toml) || return $?
+  mapfile -t paths <<< "$paths_text"
+  for path in "${paths[@]}"; do
+    coverage_args+=("--cov=$path")
+  done
+  "$PYTHON" -m pytest "${coverage_args[@]}" --cov-branch --cov-report=xml
+}
+
 floor_gate() {
   local kind=$1 report=$2
   local base
@@ -122,6 +133,7 @@ shift
 case $command in
   diff) diff_files "$@" ;;
   sources) sources "$@" ;;
+  test-python) test_python ;;
   base-workflow) base_workflow "$@" ;;
   floor) floor_gate "$@" ;;
   changed) changed_gate "$@" ;;

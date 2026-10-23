@@ -951,6 +951,46 @@ def test_filter_mutatable_source_paths(tmp_path, monkeypatch):
     )
 
 
+def test_source_paths_prints_own_and_two_folder_configs(tmp_path):
+    own = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    assert invoke("source-paths", "--config", own) == (0, "ci_workflows\n", "")
+    config = tmp_path / "pyproject.toml"
+    config.write_text('[tool.mutmut]\nsource_paths = ["hooks", "scripts"]\n')
+    assert invoke("source-paths", "--config", config) == (0, "hooks\nscripts\n", "")
+
+
+def test_source_paths_requires_config_argument():
+    stderr = io.StringIO()
+    with redirect_stderr(stderr), pytest.raises(SystemExit) as error:
+        main(["source-paths"])
+    assert error.value.code == 2
+    assert "--config" in stderr.getvalue()
+
+
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        "",
+        "[tool.mutmut]\nsource_paths = []\n",
+        '[tool.mutmut]\nsource_paths = ["hooks", 1]\n',
+        '[tool.mutmut]\nsource_paths = [""]\n',
+    ],
+)
+def test_source_paths_and_filter_sources_reject_same_invalid_config(
+    tmp_path, monkeypatch, config_text
+):
+    config = tmp_path / "pyproject.toml"
+    config.write_text(config_text)
+    expected = (
+        2,
+        "",
+        "configuration error: mutmut source_paths must be a non-empty list\n",
+    )
+    assert invoke("source-paths", "--config", config) == expected
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hooks/session_start.py\n"))
+    assert invoke("filter-sources", "--config", config) == expected
+
+
 def test_filter_sources_requires_declared_mutation_paths(tmp_path, monkeypatch):
     config = tmp_path / "pyproject.toml"
     config.write_text("[tool.mutmut]\n")
@@ -1019,6 +1059,17 @@ def test_filter_changed_javascript_sources_from_json_roots(monkeypatch):
         "--extension",
         ".mjs",
     ) == (0, "src/app.js\nlib/util.mjs\n", "")
+
+
+def test_filter_sources_rejects_non_string_json_root(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("src/app.js\n"))
+    assert invoke(
+        "filter-sources", "--roots-json", '["src", 1]', "--extension", ".js"
+    ) == (
+        2,
+        "",
+        "configuration error: mutation source paths must be a non-empty list\n",
+    )
 
 
 def test_filter_colocated_javascript_test_directories(monkeypatch):

@@ -15,7 +15,6 @@ jobs:
     uses: ./.github/workflows/python.yml
     with:
       coverage_floor: 100
-      coverage_package: ci_workflows
       install_command: python -m pip install -e '.[test]'
       caller_workflow: .github/workflows/ci.yml
       caller_job: checks
