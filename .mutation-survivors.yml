@@ -45,18 +45,12 @@
 - mutant: ci_workflows.checks.x__normalize_coverage_report__mutmut_98
   reason: ElementTree accepts encoding="UNICODE" and encoding="unicode" identically,
     including when it writes a non-ASCII source filename.
-- mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_4
-  reason: A valid LCOV record begins with SF, which replaces the initial source value
-    before any line or branch is processed.
 - mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_5
   reason: A valid LCOV record begins with SF, which replaces the initial hits mapping
     before any line or branch is processed.
 - mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_6
   reason: A valid LCOV record begins with SF, which replaces the initial branches
     mapping before any line or branch is processed.
-- mutant: ci_workflows.checks.x__normalize_lcov_report__mutmut_78
-  reason: A valid LCOV record ends once; the next SF replaces the source value before
-    another record is processed.
 - mutant: ci_workflows.checks.x__repository_root__mutmut_3
   reason: When no Git root exists, passing cwd=None to subprocess.run has the same
     effect as omitting cwd; both use the current directory.
@@ -69,9 +63,6 @@
 - mutant: ci_workflows.checks.x_changed_lines__mutmut_175
   reason: Passing cwd set to the current directory to subprocess.run is equivalent
     to omitting cwd.
-- mutant: ci_workflows.checks.x_floor_check__mutmut_21
-  reason: Valid LCOV BRF and BRH rows contain one colon, so partition and rpartition
-    return the same tag, separator and count.
 - mutant: ci_workflows.checks.x_main__mutmut_36
   reason: The source-root argument is converted to a string and then to Path inside
     changed_lines, whether argparse initially supplied a Path or a string.
@@ -90,9 +81,6 @@
 - mutant: ci_workflows.checks.x_select_functions__mutmut_28
   reason: Python package metadata lookup canonicalizes distribution names;
     version("MUTMUT") and version("mutmut") return the same installed version.
-- mutant: ci_workflows.checks.x_select_functions__mutmut_44
-  reason: For valid Python source, mutmut uses this filename for pragma error messages;
-    the generated mutant names come from the source text and remain identical.
-- mutant: ci_workflows.checks.x_select_functions__mutmut_78
-  reason: The enclosing conditional chooses dotted_name whenever mutmut_names is
-    false, so this inner condition cannot change the visited owner.
+- mutant: ci_workflows.checks.x_select_functions__mutmut_80
+  reason: This passes candidate as the nested owner in ordinary mode, where candidate
+    already equals dotted_name. In mutmut mode the original already passes candidate.

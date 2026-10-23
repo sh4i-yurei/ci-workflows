@@ -733,6 +733,30 @@ def test_mutmut_selection_uses_generated_owner_for_nested_change(tmp_path):
     ) == (0, '["pkg.f.x_outer"]\n', "")
 
 
+def test_mutmut_unmatched_pragma_is_configuration_error(tmp_path):
+    source = tmp_path / "mod.py"
+    source.write_text("def changed():\n    # pragma: no mutate end\n    return 1\n")
+    changed = tmp_path / "mod.patch"
+    changed.write_text(
+        "diff --git a/mod.py b/mod.py\n--- a/mod.py\n+++ b/mod.py\n"
+        "@@ -1,0 +2,1 @@\n+    # pragma: no mutate end\n"
+    )
+    assert invoke(
+        "select-functions",
+        "--source",
+        source,
+        "--source-name",
+        "mod.py",
+        "--diff-file",
+        changed,
+        "--mutmut",
+    ) == (
+        2,
+        "",
+        "configuration error: # pragma: no mutate end at mod.py:2 without a # pragma: no mutate start\n",
+    )
+
+
 def test_mutmut_selection_keeps_owner_through_nested_class(tmp_path):
     source = tmp_path / "pkg" / "f.py"
     source.parent.mkdir()

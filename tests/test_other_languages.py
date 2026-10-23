@@ -97,6 +97,20 @@ def test_javascript_floor_sums_multiple_branch_records(tmp_path):
     ) == (1, "coverage 50.0% is below floor 100%\n", "")
 
 
+@pytest.mark.parametrize("malformed", ["BRF:2:1", "BRH:1:x"])
+def test_javascript_floor_rejects_malformed_branch_count(tmp_path, malformed):
+    report = lcov(tmp_path)
+    tag = malformed.partition(":")[0]
+    report.write_text(report.read_text().replace(f"{tag}:2", malformed))
+    assert invoke(
+        "floor", "--kind", "javascript", "--report", report, "--head-floor", "80"
+    ) == (
+        2,
+        f"configuration error: invalid literal for int() with base 10: '{malformed.partition(':')[2]}'\n",
+        "",
+    )
+
+
 def test_javascript_unmeasured_branch_is_uncovered(tmp_path):
     report = lcov(tmp_path)
     report.write_text(report.read_text().replace("BRDA:2,0,1,1", "BRDA:2,0,1,-"))
@@ -227,6 +241,24 @@ def test_javascript_multiple_changed_sources_keep_lcov_records(tmp_path):
         combined,
     ) == (0, "all changed lines covered\n", "")
     assert report.read_text() == original + second
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_javascript_stray_record_end_keeps_valid_record(tmp_path, position):
+    report = lcov(tmp_path)
+    valid = report.read_text()
+    report.write_text(
+        "end_of_record\n" + valid if position == "before" else valid + "end_of_record\n"
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, "src/app.js"),
+    ) == (0, "all changed lines covered\n", "")
 
 
 def test_javascript_second_changed_source_is_uncovered(tmp_path):

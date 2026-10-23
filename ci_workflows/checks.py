@@ -378,14 +378,18 @@ def select_functions(
             if version("mutmut") != "3.8.0":
                 raise ConfigurationError(error)
             from mutmut.mutation.file_mutation import mutate_file_contents
+            from mutmut.mutation.pragma_handling import PragmaParseError
             from mutmut.utils.format_utils import get_mutant_name, make_mutant_key
         except (ImportError, PackageNotFoundError) as exc:
             raise ConfigurationError(error) from exc
 
-        generated = {
-            get_mutant_name(Path(source_name), name.partition("__mutmut_")[0])
-            for name in mutate_file_contents(source_name, source_text).mutant_names
-        }
+        try:
+            generated = {
+                get_mutant_name(Path(source_name), name.partition("__mutmut_")[0])
+                for name in mutate_file_contents(source_name, source_text).mutant_names
+            }
+        except PragmaParseError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def visit(
         body: list[ast.stmt],
