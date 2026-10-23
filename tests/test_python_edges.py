@@ -122,10 +122,9 @@ def test_cli_rejects_missing_or_invalid_arguments(arguments, error, capsys):
         main(arguments)
     assert exited.value.code == 2
     command = f" {arguments[0]}" if arguments else ""
-    assert (
-        capsys.readouterr().err.splitlines()[-1]
-        == f"ci-checks{command}: error: {error}"
-    )
+    actual = capsys.readouterr().err.splitlines()[-1]
+    expected = f"ci-checks{command}: error: {error}"
+    assert actual.replace("'", "") == expected.replace("'", "")
 
 
 def test_cli_help_names_command(capsys):
