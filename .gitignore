@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.coverage
+coverage.xml
+*.egg-info/
+.venv/
+.cache/
+mutants/
+.ci-workflows/
+**/node_modules/
+**/coverage.lcov
+**/coverage/
+coverage-jacoco.xml
+**/reports/mutation/
