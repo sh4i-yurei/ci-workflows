@@ -108,6 +108,47 @@ def test_no_changed_python_lines(tmp_path):
     )
 
 
+def test_deleted_only_hunk_with_context_has_no_added_lines(tmp_path):
+    repository = tmp_path / "repo"
+    source = repository / "pkg" / "f.py"
+    source.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    source.write_text("first\nremoved\nlast\n")
+    subprocess.run(["git", "add", "pkg/f.py"], cwd=repository, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    source.write_text("first\nlast\n")
+    generated = subprocess.run(
+        ["git", "diff", "--unified=3", "HEAD", "--", "pkg/f.py"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    change = tmp_path / "change.patch"
+    change.write_text(generated.stdout)
+    result = invoke(
+        "changed-lines", "--report", report(tmp_path), "--diff-file", change
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "no changed Python lines to check\n",
+        "",
+    )
+
+
 def base_workflow(tmp_path, floor):
     path = tmp_path / "base.yml"
     path.write_text(f"jobs:\n  checks:\n    with:\n      coverage_floor: {floor}\n")
@@ -172,6 +213,28 @@ def test_changed_function_selection(tmp_path):
         patch(tmp_path, added_line=5),
     )
     assert (result.returncode, result.stdout, result.stderr) == (0, '["pkg.f.b"]\n', "")
+
+
+def test_nested_changed_function_names_both_enclosing_functions(tmp_path):
+    source = tmp_path / "pkg" / "f.py"
+    source.parent.mkdir()
+    source.write_text(
+        "def outer():\n    def inner():\n        return 1\n    return inner()\n"
+    )
+    result = invoke(
+        "select-functions",
+        "--source",
+        source,
+        "--source-name",
+        "pkg/f.py",
+        "--diff-file",
+        patch(tmp_path, added_line=3),
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        '["pkg.f.outer", "pkg.f.outer.inner"]\n',
+        "",
+    )
 
 
 def test_deleted_line_selects_its_function(tmp_path):
@@ -275,6 +338,11 @@ def test_trailing_deletion_selects_preceding_function(tmp_path):
             "def target():\n    value = 1\n\ndef after():\n    return 2\n",
             '["pkg.f.target"]\n',
         ),
+        (
+            "def first(): return 1\n\ndef after(): return 2\n",
+            "def first(): return 1\ndef after(): return 2\n",
+            '["pkg.f.after", "pkg.f.first"]\n',
+        ),
     ],
 )
 def test_real_zero_context_deletion_selects_function(
@@ -349,6 +417,28 @@ def test_mutmut_gate_accepts_standalone_fixture_without_package(tmp_path, monkey
         0,
         "mutation survivors accepted",
     )
+
+
+def test_mutmut_gate_names_every_selected_function_without_results(tmp_path):
+    result = mutation_result(tmp_path, {"pkg.f.other__mutmut_1": 1})
+    assert survivor_check(
+        result,
+        survivor_list(tmp_path, "[]\n"),
+        "mutmut",
+        selected_functions=["pkg.f.first", "pkg.f.second"],
+    ) == (1, "selected functions have no mutation results: pkg.f.first, pkg.f.second")
+
+
+def test_killed_explanation_outside_selected_function_is_stale(tmp_path):
+    old = "pkg.f.old__mutmut_1"
+    selected = "pkg.f.new__mutmut_1"
+    result = mutation_result(tmp_path, {old: 1, selected: 1})
+    explanations = survivor_list(
+        tmp_path, f"- mutant: {old}\n  reason: no observable difference\n"
+    )
+    assert survivor_check(
+        result, explanations, "mutmut", selected_functions=["pkg.f.new"]
+    ) == (1, f"stale mutant: {old}")
 
 
 def test_mutmut_reruns_cached_mutants_after_test_file_change(tmp_path):

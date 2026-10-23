@@ -34,6 +34,16 @@ def test_prometheus_complete_accepts_both_alerts():
     )
 
 
+def test_rule_file_names_must_be_nonempty_strings(tmp_path):
+    invalid = tmp_path / "invalid.yml"
+    invalid.write_text("rule_files: [1]\ntests: []\n")
+    assert invoke("alerts", "--test-file", invalid) == (
+        2,
+        "configuration error: rule_files must be a list of strings\n",
+        "",
+    )
+
+
 @pytest.mark.parametrize(
     "quiet_case", ["{alertname: A, exp_alerts:}", "{alertname: A}"]
 )

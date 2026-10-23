@@ -226,7 +226,7 @@ def changed_lines(
         for item in PatchSet(io.StringIO(patch_text))
         if item.path in language_changes
     )
-    with tempfile.TemporaryDirectory(dir=report.parent) as directory:
+    with tempfile.TemporaryDirectory() as directory:
         gate_report = report.resolve()
         if gate_lcov is not None:
             gate_report = Path(directory) / "changed.lcov"

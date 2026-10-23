@@ -213,3 +213,17 @@ def test_python_workflow_installs_verified_mutmut_version():
         "python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt "
         "-e '.ci-workflows[mutation]'"
     )
+
+
+def test_local_mutation_command_uses_ci_selector_and_gate():
+    instructions = (ROOT / "AGENTS.md").read_text()
+    workflow_step = next(
+        step["run"]
+        for step in workflow("python.yml")["jobs"]["checks"]["steps"]
+        if step["name"] == "Mutate changed functions"
+    )
+    assert workflow_step == "bash .ci-workflows/scripts/workflow-glue.sh mutate-python"
+    assert (
+        "BASE_SHA=$(git merge-base origin/main HEAD) "
+        "bash scripts/workflow-glue.sh mutate-python"
+    ) in instructions

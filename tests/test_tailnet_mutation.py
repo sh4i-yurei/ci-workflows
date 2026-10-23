@@ -665,6 +665,130 @@ def test_mutations_allow_policy_without_grants_or_acls(tmp_path):
     )
 
 
+def test_policy_cli_defaults_use_environment_file_and_official_endpoint(
+    tmp_path, monkeypatch
+):
+    policy = write_policy(tmp_path, {"grants": []})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TS_TAILNET", "example.com")
+    monkeypatch.setenv("TS_ACCESS_TOKEN", "secret-token")
+    captured = []
+
+    class Response(io.BytesIO):
+        status = 200
+
+    def fake_urlopen(request, *, timeout):
+        captured.append(
+            (
+                request.full_url,
+                request.get_method(),
+                timeout,
+                request.get_header("Authorization"),
+                json.loads(request.data),
+            )
+        )
+        return Response(b'{"status":200}')
+
+    monkeypatch.setattr("ci_workflows.tailnet.urlopen", fake_urlopen)
+    output = io.StringIO()
+    default_survivors = tmp_path / ".mutation-survivors.yml"
+    default_survivors.write_text("invalid\n")
+    with redirect_stdout(output):
+        code = main(["policy", "--file", str(policy)])
+    assert (code, output.getvalue(), captured) == (
+        2,
+        "configuration error: survivors file must be a list\n",
+        [],
+    )
+    default_survivors.unlink()
+    output = io.StringIO()
+    with redirect_stdout(output):
+        code = main(["policy", "--file", str(policy)])
+    assert (code, output.getvalue()) == (
+        0,
+        "0 mutants killed; 0 survived; 1 validate requests\n",
+    )
+    assert captured == [
+        (
+            "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate",
+            "POST",
+            10,
+            "Basic c2VjcmV0LXRva2VuOg==",
+            {"grants": []},
+        )
+    ]
+
+
+def test_policy_cli_passes_explicit_timeout_to_validate(tmp_path, monkeypatch):
+    policy = write_policy(tmp_path, {"grants": []})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TS_ACCESS_TOKEN", "secret-token")
+    captured = []
+
+    class Response(io.BytesIO):
+        status = 200
+
+    def fake_urlopen(request, *, timeout):
+        captured.append((request.full_url, timeout))
+        return Response(b'{"status":200}')
+
+    monkeypatch.setattr("ci_workflows.tailnet.urlopen", fake_urlopen)
+    output = io.StringIO()
+    with redirect_stdout(output):
+        code = main(
+            [
+                "policy",
+                "--file",
+                str(policy),
+                "--tailnet",
+                "another.example",
+                "--api-base-url",
+                "https://validate.example.test",
+                "--timeout",
+                "0.05",
+            ]
+        )
+    assert (code, output.getvalue(), captured) == (
+        0,
+        "0 mutants killed; 0 survived; 1 validate requests\n",
+        [
+            (
+                "https://validate.example.test/api/v2/tailnet/another.example/acl/validate",
+                0.05,
+            )
+        ],
+    )
+
+
+def test_policy_cli_without_access_token_requires_federated_identity(
+    tmp_path, monkeypatch
+):
+    policy = write_policy(tmp_path, {"grants": []})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TS_TAILNET", "example.com")
+    monkeypatch.delenv("TS_ACCESS_TOKEN", raising=False)
+    for name in (
+        "TS_OAUTH_ID",
+        "TS_AUDIENCE",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    requests = []
+    monkeypatch.setattr(
+        "ci_workflows.tailnet.urlopen",
+        lambda *args, **kwargs: requests.append((args, kwargs)),
+    )
+    output = io.StringIO()
+    with redirect_stdout(output):
+        code = main(["policy", "--file", str(policy)])
+    assert (code, output.getvalue(), requests) == (
+        2,
+        "configuration error: federated Tailscale identity inputs are missing\n",
+        [],
+    )
+
+
 def test_policy_cases_uses_official_endpoint_and_caller_timeout(monkeypatch, tmp_path):
     seen = []
     policy = write_policy(tmp_path, {"grants": []})

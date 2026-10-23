@@ -2,6 +2,7 @@
 
 import io
 import json
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -86,6 +87,237 @@ def test_javascript_floor_uses_reported_branch_denominator(tmp_path):
     assert invoke(
         "floor", "--kind", "javascript", "--report", report, "--head-floor", "80"
     ) == (1, "coverage 50.0% is below floor 80%\n", "")
+
+
+def test_javascript_floor_sums_multiple_branch_records(tmp_path):
+    report = lcov(tmp_path)
+    report.write_text("TN:\nSF:src/app.js\nBRF:1\nBRH:1\nBRF:1\nBRH:0\nend_of_record\n")
+    assert invoke(
+        "floor", "--kind", "javascript", "--report", report, "--head-floor", "100"
+    ) == (1, "coverage 50.0% is below floor 100%\n", "")
+
+
+def test_javascript_unmeasured_branch_is_uncovered(tmp_path):
+    report = lcov(tmp_path)
+    report.write_text(report.read_text().replace("BRDA:2,0,1,1", "BRDA:2,0,1,-"))
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, "src/app.js"),
+    ) == (1, "uncovered changed lines: src/app.js:2\n", "")
+
+
+def test_javascript_line_without_branch_records_is_covered(tmp_path):
+    report = lcov(tmp_path)
+    report.write_text("TN:\nSF:src/app.js\nDA:2,1\nLF:1\nLH:1\nend_of_record\n")
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, "src/app.js"),
+    ) == (0, "all changed lines covered\n", "")
+
+
+@pytest.mark.parametrize(
+    ("hits", "expected"),
+    [
+        (1, (0, "all changed lines covered\n", "")),
+        (0, (1, "uncovered changed lines: src/app.js:2\n", "")),
+    ],
+)
+def test_javascript_function_metadata_precedes_line_records(tmp_path, hits, expected):
+    report = lcov(tmp_path)
+    report.write_text(
+        f"TN:\nSF:src/app.js\nFN:2,work\nFNDA:1,work\nDA:2,{hits}\n"
+        "BRDA:2,0,0,1\nBRDA:2,0,1,1\nLF:1\nLH:1\nBRF:2\nBRH:2\nend_of_record\n"
+    )
+    assert (
+        invoke(
+            "changed-lines",
+            "--kind",
+            "javascript",
+            "--report",
+            report,
+            "--diff-file",
+            patch(tmp_path, "src/app.js"),
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "filename", "extension"),
+    [
+        ("javascript", "src/app.js", ".cjs"),
+        ("shell", "scripts/task.sh", ".bash"),
+        ("powershell", "scripts/health.ps1", ".psm1"),
+    ],
+)
+def test_changed_lines_accepts_each_supported_source_suffix(
+    tmp_path, kind, filename, extension
+):
+    source = str(Path(filename).with_suffix(extension))
+    report = {"javascript": lcov, "shell": cobertura, "powershell": jacoco}[kind](
+        tmp_path
+    )
+    report.write_text(
+        report.read_text()
+        .replace(filename, source)
+        .replace(Path(filename).name, Path(source).name)
+    )
+    options = ["--source-root", "scripts"] if kind != "javascript" else []
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        kind,
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, source),
+        *options,
+    ) == (0, "all changed lines covered\n", "")
+
+
+def test_powershell_report_without_package_name_uses_root_source(tmp_path):
+    report = jacoco(tmp_path)
+    report.write_text(report.read_text().replace(' name="scripts"', ""))
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "powershell",
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, "health.ps1"),
+    ) == (0, "all changed lines covered\n", "")
+    assert ET.parse(report).find(".//package").attrib["name"] == "."
+
+
+def test_javascript_filter_excludes_colocated_cjs_test(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("src/app.cjs\nsrc/app.test.cjs\n"))
+    assert invoke(
+        "filter-sources", "--roots-json", '["src"]', "--extension", ".cjs"
+    ) == (0, "src/app.cjs\n", "")
+
+
+def test_javascript_multiple_changed_sources_keep_lcov_records(tmp_path):
+    report = lcov(tmp_path)
+    original = report.read_text()
+    second = original.replace("src/app.js", "src/other.js")
+    report.write_text(original + second)
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        patch(tmp_path, "src/app.js").read_text()
+        + patch(tmp_path, "src/other.js").read_text()
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+    ) == (0, "all changed lines covered\n", "")
+    assert report.read_text() == original + second
+
+
+def test_javascript_second_changed_source_is_uncovered(tmp_path):
+    report = lcov(tmp_path)
+    first = report.read_text()
+    second = first.replace("src/app.js", "src/other.js").replace("DA:2,1", "DA:2,0")
+    report.write_text(first + second)
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        patch(tmp_path, "src/app.js").read_text()
+        + patch(tmp_path, "src/other.js").read_text()
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+    ) == (1, "uncovered changed lines: src/other.js:2\n", "")
+
+
+def test_javascript_changed_test_source_is_skipped(tmp_path):
+    report = lcov(tmp_path)
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        patch(tmp_path, "src/app.js").read_text()
+        + patch(tmp_path, "src/app.test.js").read_text()
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+    ) == (
+        0,
+        "all changed lines covered; skipped changed source outside declared paths: src/app.test.js\n",
+        "",
+    )
+
+
+def test_two_changed_sources_absent_from_coverage_are_named(tmp_path):
+    report = lcov(tmp_path)
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        patch(tmp_path, "src/first.js").read_text()
+        + patch(tmp_path, "src/second.js").read_text()
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+    ) == (
+        2,
+        "configuration error: changed source absent from coverage: src/first.js, src/second.js\n",
+        "",
+    )
+
+
+def test_two_changed_sources_outside_declared_root_are_named(tmp_path):
+    report = lcov(tmp_path)
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        "".join(
+            patch(tmp_path, name).read_text()
+            for name in ("src/app.js", "vendor/first.js", "vendor/second.js")
+        )
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+        "--source-roots-json",
+        '["src"]',
+    ) == (
+        0,
+        "all changed lines covered; skipped changed source outside declared paths: vendor/first.js, vendor/second.js\n",
+        "",
+    )
 
 
 def test_javascript_floor_without_branches(tmp_path):
@@ -639,6 +871,25 @@ def test_stryker_scope_preserves_unchanged_file_explanations(tmp_path):
         "stale mutant: src/old.js#ArithmeticOperator@2:0-2:1~cb23f6635a581786\n",
         "",
     )
+
+
+def test_stryker_unselected_file_with_hash_in_name_is_stale(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "src" / "app#part.js"
+    source.parent.mkdir()
+    source.write_text("export const value = 1;\n")
+    key = "src/app#part.js#ArithmeticOperator@2:0-2:1~cb23f6635a581786"
+    assert invoke(
+        "survivors",
+        "--format",
+        "stryker",
+        "--results",
+        stryker(tmp_path, {0: "Killed"}),
+        "--survivors-file",
+        explanations(tmp_path, f"- mutant: {key}\n  reason: Unchanged file\n"),
+        "--selected-file",
+        "src/app.js",
+    ) == (1, f"stale mutant: {key}\n", "")
 
 
 def test_explanation_for_existing_unselected_stryker_file_is_retained(

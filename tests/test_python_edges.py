@@ -75,6 +75,68 @@ def test_module_entry_point_in_process(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr() == ("coverage 85.0% meets floor 80%\n", "")
 
 
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        ([], "the following arguments are required: command"),
+        (
+            ["changed-lines"],
+            "the following arguments are required: --report, --diff-file",
+        ),
+        (["floor"], "the following arguments are required: --report, --head-floor"),
+        (
+            ["select-functions"],
+            "the following arguments are required: --source, --source-name, --diff-file",
+        ),
+        (
+            ["survivors"],
+            "the following arguments are required: --format, --results, --survivors-file",
+        ),
+        (["filter-sources"], "one of the arguments --config --roots-json is required"),
+        (["alerts"], "the following arguments are required: --test-file"),
+        (["policy"], "the following arguments are required: --file"),
+        (
+            ["changed-lines", "--report", "x", "--diff-file", "y", "--kind", "invalid"],
+            "argument --kind: invalid choice: 'invalid' (choose from 'python', 'javascript', 'shell', 'powershell')",
+        ),
+        (
+            ["floor", "--report", "x", "--head-floor", "80", "--kind", "invalid"],
+            "argument --kind: invalid choice: 'invalid' (choose from 'python', 'javascript', 'shell', 'powershell')",
+        ),
+        (
+            [
+                "survivors",
+                "--format",
+                "invalid",
+                "--results",
+                "x",
+                "--survivors-file",
+                "y",
+            ],
+            "argument --format: invalid choice: 'invalid' (choose from 'mutmut', 'stryker')",
+        ),
+    ],
+)
+def test_cli_rejects_missing_or_invalid_arguments(arguments, error, capsys):
+    with pytest.raises(SystemExit) as exited:
+        main(arguments)
+    assert exited.value.code == 2
+    command = f" {arguments[0]}" if arguments else ""
+    assert (
+        capsys.readouterr().err.splitlines()[-1]
+        == f"ci-checks{command}: error: {error}"
+    )
+
+
+def test_cli_help_names_command(capsys):
+    with pytest.raises(SystemExit) as exited:
+        main(["--help"])
+    assert exited.value.code == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert output.out.splitlines()[0].startswith("usage: ci-checks ")
+
+
 def test_two_uncovered_lines_are_listed_exactly(tmp_path):
     result = invoke(
         "changed-lines",
@@ -84,6 +146,85 @@ def test_two_uncovered_lines_are_listed_exactly(tmp_path):
         diff(tmp_path, count=2),
     )
     assert result == (1, "uncovered changed lines: pkg/f.py:12, pkg/f.py:13\n", "")
+
+
+def test_complete_branch_remains_covered(tmp_path):
+    coverage = report(tmp_path)
+    coverage.write_text(
+        coverage.read_text().replace(
+            'number="12" hits="1"',
+            'number="12" hits="1" branch="true" condition-coverage="100% (2/2)"',
+        )
+    )
+    assert invoke(
+        "changed-lines", "--report", coverage, "--diff-file", diff(tmp_path)
+    ) == (0, "all changed lines covered\n", "")
+    assert 'number="12" hits="1"' in coverage.read_text()
+
+
+def test_cobertura_removes_source_roots_after_normalizing(tmp_path):
+    coverage = report(tmp_path)
+    coverage.write_text(
+        coverage.read_text().replace(
+            "<packages>", "<sources><source>unused</source></sources><packages>"
+        )
+    )
+    assert invoke(
+        "changed-lines", "--report", coverage, "--diff-file", diff(tmp_path)
+    ) == (0, "all changed lines covered\n", "")
+    assert "<sources>" not in coverage.read_text()
+
+
+def test_absolute_external_coverage_path_is_reported_as_absent(tmp_path):
+    coverage = report(tmp_path)
+    outside = tmp_path / "outside.py"
+    coverage.write_text(
+        coverage.read_text().replace('filename="pkg/f.py"', f'filename="{outside}"')
+    )
+    assert invoke(
+        "changed-lines", "--report", coverage, "--diff-file", diff(tmp_path)
+    ) == (2, "configuration error: changed source absent from coverage: pkg/f.py\n", "")
+
+
+def test_changed_lines_with_diff_file_outside_git_checkout(tmp_path, monkeypatch):
+    coverage = report(tmp_path)
+    change = diff(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert invoke("changed-lines", "--report", coverage, "--diff-file", change) == (
+        2,
+        "configuration error: diff-cover did not return a JSON report\n",
+        "",
+    )
+
+
+def test_changed_lines_accepts_writable_report_in_read_only_directory(tmp_path):
+    readonly = tmp_path / "readonly"
+    readonly.mkdir()
+    coverage = readonly / "coverage.xml"
+    coverage.write_text(report(tmp_path).read_text())
+    change = diff(tmp_path)
+    readonly.chmod(0o555)
+    try:
+        assert invoke("changed-lines", "--report", coverage, "--diff-file", change) == (
+            0,
+            "all changed lines covered\n",
+            "",
+        )
+    finally:
+        readonly.chmod(0o755)
+
+
+def test_cobertura_preserves_unicode_filename(tmp_path):
+    coverage = report(tmp_path)
+    coverage.write_text(coverage.read_text().replace("pkg/f.py", "pkg/café.py"))
+    patch = diff(tmp_path)
+    patch.write_text(patch.read_text().replace("pkg/f.py", "pkg/café.py"))
+    assert invoke("changed-lines", "--report", coverage, "--diff-file", patch) == (
+        0,
+        "all changed lines covered\n",
+        "",
+    )
+    assert 'filename="pkg/café.py"' in coverage.read_text()
 
 
 def test_changed_source_missing_from_report_fails(tmp_path):
@@ -591,6 +732,55 @@ def test_mutmut_selection_uses_generated_owner_for_nested_change(tmp_path):
         changed,
         "--mutmut",
     ) == (0, '["pkg.f.x_outer"]\n', "")
+
+
+def test_mutmut_selection_keeps_owner_through_nested_class(tmp_path):
+    source = tmp_path / "pkg" / "f.py"
+    source.parent.mkdir()
+    source.write_text(
+        "def outer():\n    class Local:\n        def method(self):\n"
+        "            return 1\n    return Local\n"
+    )
+    changed = tmp_path / "nested.patch"
+    changed.write_text(
+        "diff --git a/pkg/f.py b/pkg/f.py\n--- a/pkg/f.py\n+++ b/pkg/f.py\n"
+        "@@ -3,0 +4,1 @@\n+            return 1\n"
+    )
+    assert invoke(
+        "select-functions",
+        "--source",
+        source,
+        "--source-name",
+        "pkg/f.py",
+        "--diff-file",
+        changed,
+        "--mutmut",
+    ) == (0, '["pkg.f.x_outer"]\n', "")
+
+
+def test_mutmut_name_separator_inside_function_name_is_reported_as_gap(tmp_path):
+    source = tmp_path / "pkg" / "f.py"
+    source.parent.mkdir()
+    source.write_text("def foo__mutmut_bar():\n    return 1\n")
+    changed = tmp_path / "name.patch"
+    changed.write_text(
+        "diff --git a/pkg/f.py b/pkg/f.py\n--- a/pkg/f.py\n+++ b/pkg/f.py\n"
+        "@@ -1,0 +2,1 @@\n+    return 1\n"
+    )
+    assert invoke(
+        "select-functions",
+        "--source",
+        source,
+        "--source-name",
+        "pkg/f.py",
+        "--diff-file",
+        changed,
+        "--mutmut",
+    ) == (
+        0,
+        "[]\n",
+        "mutation tool gap: pkg.f.foo__mutmut_bar (mutmut generated no mutants)\n",
+    )
 
 
 def test_mutmut_decorated_function_is_named_gap(tmp_path):

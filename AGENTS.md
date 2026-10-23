@@ -11,8 +11,10 @@ Checks, run from the repository root inside a virtual environment with the packa
 
 - tests and coverage: `python -m pytest --cov=ci_workflows --cov-branch --cov-report=xml -q`
 - coverage floor: `python -m ci_workflows floor --report coverage.xml --head-floor 100`
-- mutation: `mutmut run`, then
-  `python -m ci_workflows survivors --format mutmut --results mutants --survivors-file .mutation-survivors.yml`
+- mutation for this repository's pull request diff: with `origin/main` fetched, run
+  `BASE_SHA=$(git merge-base origin/main HEAD) bash scripts/workflow-glue.sh mutate-python`.
+  This uses the same changed-function selection and survivors gate as CI. Run it on a clean
+  checkout with the package and mutation extra installed, and let every selected mutant finish.
 - workflow lint: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`
 - whitespace: `git diff --check`
 

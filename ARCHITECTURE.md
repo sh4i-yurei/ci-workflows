@@ -53,7 +53,9 @@ caller repository
   finished every mutant and reflects the current code and tests. CI always runs mutation fresh.
   Locally, mutmut's own cache invalidation reruns every mutant a source or test change affects.
   Freshness is never judged by comparing file timestamps. A survivor may be explained only when
-  no test could kill it.
+  no test could kill it. The repository's local mutation command in `AGENTS.md` calls the same
+  changed-function selector and survivors gate as CI, using the pull request's merge base. A
+  first pull request that changes every function therefore selects the whole package locally.
 - **Temporary files never live inside the repository,** because mutmut copies the repository, and
   parallel mutmut workers never share a temporary directory.
 - **Everything is pinned.** Actions by full commit SHA, tools and Python packages by exact version.
