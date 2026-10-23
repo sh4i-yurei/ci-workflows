@@ -547,6 +547,18 @@ def survivor_check(
     return 0, "mutation survivors accepted"
 
 
+def read_mutation_source_paths(config: Path) -> list[str]:
+    document = tomllib.loads(config.read_text())
+    roots = document.get("tool", {}).get("mutmut", {}).get("source_paths")
+    if (
+        not isinstance(roots, list)
+        or not roots
+        or not all(isinstance(root, str) and root for root in roots)
+    ):
+        raise ConfigurationError("mutmut source_paths must be a non-empty list")
+    return roots
+
+
 def filter_sources(
     config: Path | None,
     changed_files: list[str],
@@ -554,18 +566,15 @@ def filter_sources(
     extensions: list[str] | None = None,
 ) -> list[str]:
     if config is not None:
-        document = tomllib.loads(config.read_text())
-        roots = document.get("tool", {}).get("mutmut", {}).get("source_paths")
-        error = "mutmut source_paths must be a non-empty list"
+        roots = read_mutation_source_paths(config)
     else:
         roots = json.loads(roots_json)
-        error = "mutation source paths must be a non-empty list"
-    if (
-        not isinstance(roots, list)
-        or not roots
-        or not all(isinstance(root, str) and root for root in roots)
-    ):
-        raise ConfigurationError(error)
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or not all(isinstance(root, str) and root for root in roots)
+        ):
+            raise ConfigurationError("mutation source paths must be a non-empty list")
     source_paths = [Path(root) for root in roots]
     allowed_extensions = extensions or [".py"]
     return [
@@ -620,6 +629,8 @@ def main(argv: list[str] | None = None) -> int:
     roots.add_argument("--config", type=Path)
     roots.add_argument("--roots-json")
     source_filter.add_argument("--extension", action="append")
+    source_paths = commands.add_parser("source-paths")
+    source_paths.add_argument("--config", type=Path, required=True)
     alerts = commands.add_parser("alerts")
     alerts.add_argument("--test-file", action="append", type=Path, required=True)
     policy = commands.add_parser("policy")
@@ -633,7 +644,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     error_stream = (
         sys.stderr
-        if args.command in {"select-functions", "filter-sources"}
+        if args.command in {"select-functions", "filter-sources", "source-paths"}
         else sys.stdout
     )
     try:
@@ -676,6 +687,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.extension,
             ):
                 print(name)
+            return 0
+        elif args.command == "source-paths":
+            for path in read_mutation_source_paths(args.config):
+                print(path)
             return 0
         elif args.command == "alerts":
             code, message = alert_cases(args.test_file)

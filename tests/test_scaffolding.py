@@ -35,7 +35,6 @@ def test_own_ci_calls_shared_python_checks():
         "uses": "./.github/workflows/python.yml",
         "with": {
             "coverage_floor": "100",
-            "coverage_package": "ci_workflows",
             "install_command": "python -m pip install -e '.[test]'",
             "caller_workflow": ".github/workflows/ci.yml",
             "caller_job": "checks",
@@ -52,7 +51,6 @@ def test_python_workflow_is_reusable_and_runs_pytest_with_branch_coverage():
                     "required": "true",
                     "type": "number",
                 },
-                "coverage_package": {"required": "true", "type": "string"},
                 "install_command": {"required": "true", "type": "string"},
                 "caller_workflow": {"required": "true", "type": "string"},
                 "caller_job": {"required": "true", "type": "string"},
@@ -61,18 +59,13 @@ def test_python_workflow_is_reusable_and_runs_pytest_with_branch_coverage():
     }
     assert python["permissions"] == {"contents": "read"}
     runs = [step["run"] for step in python["jobs"]["checks"]["steps"] if "run" in step]
-    assert (
-        'python -m pytest --cov="$COVERAGE_PACKAGE" --cov-branch --cov-report=xml'
-        in runs
-    )
+    assert "bash .ci-workflows/scripts/workflow-glue.sh test-python" in runs
     coverage_step = next(
         step
         for step in python["jobs"]["checks"]["steps"]
-        if "pytest" in step.get("run", "")
+        if step.get("name") == "Run tests with branch coverage"
     )
-    assert coverage_step["env"] == {
-        "COVERAGE_PACKAGE": "${{ inputs.coverage_package }}",
-    }
+    assert "env" not in coverage_step
     steps = python["jobs"]["checks"]["steps"]
     assert {step["name"] for step in steps} == {
         "Check out caller",
@@ -108,6 +101,8 @@ def test_readme_documents_workflow_contract():
     assert "mutant: pkg.f.x__mutmut_3" in readme
     assert "reason: Equivalent transformation" in readme
     assert "Shell and PowerShell have no mutation tool" in readme
+    assert "coverage_package" not in readme
+    assert "source_paths" in readme
 
 
 @pytest.mark.parametrize(

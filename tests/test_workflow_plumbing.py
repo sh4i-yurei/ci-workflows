@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pytest
 import yaml
@@ -30,6 +31,79 @@ def run(repo, *args, base_sha="", input_text="", extra_env=None):
         capture_output=True,
         check=False,
     )
+
+
+def test_python_coverage_arguments_follow_two_declared_sources(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.mutmut]\nsource_paths = ["hooks", "scripts"]\n'
+    )
+    invocation = tmp_path / "invocation.txt"
+    wrapper = tmp_path / "python-wrapper"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "if sys.argv[1:4] == ['-m', 'ci_workflows', 'source-paths']:\n"
+        "    raise SystemExit(subprocess.call([sys.executable, *sys.argv[1:]]))\n"
+        "Path(os.environ['INVOCATION']).write_text('\\n'.join(sys.argv[1:]) + '\\n')\n"
+    )
+    wrapper.chmod(0o755)
+    result = run(
+        tmp_path,
+        "test-python",
+        extra_env={"PYTHON": str(wrapper), "INVOCATION": str(invocation)},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert invocation.is_file()
+    assert invocation.read_text() == (
+        "-m\npytest\n--cov=hooks\n--cov=scripts\n--cov-branch\n--cov-report=xml\n"
+    )
+
+
+def test_python_coverage_stops_before_pytest_on_invalid_sources(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[tool.mutmut]\n")
+    result = run(tmp_path, "test-python")
+    assert (result.returncode, result.stdout, result.stderr) == (
+        2,
+        "",
+        "configuration error: mutmut source_paths must be a non-empty list\n",
+    )
+    assert not (tmp_path / "coverage.xml").exists()
+
+
+def test_python_coverage_reports_unimported_files_in_both_folders(tmp_path):
+    fixtures = ROOT / "tests/fixtures/python"
+    # Codex-config files copied from commit 09a0775 without changes.
+    for relative in ("hooks/session_start.py", "scripts/merge_config.py"):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True)
+        target.write_bytes((fixtures / relative).read_bytes())
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.mutmut]\nsource_paths = ["hooks", "scripts"]\n'
+    )
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_only.py").write_text(
+        "def test_nothing_imported():\n    assert True\n"
+    )
+    result = run(tmp_path, "test-python")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (tmp_path / "coverage.xml").is_file()
+    report = ET.parse(tmp_path / "coverage.xml")
+    sources = [Path(node.text) for node in report.findall("./sources/source")]
+    classes = {}
+    for node in report.findall(".//class"):
+        matches = [
+            source / node.attrib["filename"]
+            for source in sources
+            if (source / node.attrib["filename"]).is_file()
+        ]
+        assert len(matches) == 1
+        classes[str(matches[0].relative_to(tmp_path))] = node.attrib["line-rate"]
+    assert classes == {
+        "hooks/session_start.py": "0",
+        "scripts/merge_config.py": "0",
+    }
 
 
 @pytest.fixture

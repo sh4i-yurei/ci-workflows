@@ -16,7 +16,7 @@ These public reusable GitHub Actions workflows run the checks in the testing sta
 
 ## Inputs
 
-Each language workflow accepts the caller's required numeric `coverage_floor` from 0 to 100. The Python workflow also requires `coverage_package` (the caller's importable package), `install_command` (how to install the caller's code and tests), and `caller_workflow` (the path to the caller's workflow for the floor comparison). Its changed-line and mutation steps read `[tool.mutmut].source_paths` from the caller's `pyproject.toml` so changed test files are not sent to the source coverage gate or mutmut. A pull request must keep its floor at or above the base branch's value. The Python, JavaScript, shell, and PowerShell workflows require coverage reports produced by their test steps. The Molecule workflow runs the caller's `molecule/` scenarios. The Prometheus and Tailscale workflows take paths to caller rule tests and policy files.
+Each language workflow accepts the caller's required numeric `coverage_floor` from 0 to 100. The Python workflow also requires `install_command` (how to install the caller's code and tests) and `caller_workflow` (the path to the caller's workflow for the floor comparison). It reads `[tool.mutmut].source_paths` from the caller's `pyproject.toml` to measure coverage over every declared path and to scope its changed-line and mutation steps. A pull request must keep its floor at or above the base branch's value. The Python, JavaScript, shell, and PowerShell workflows require coverage reports produced by their test steps. The Molecule workflow runs the caller's `molecule/` scenarios. The Prometheus and Tailscale workflows take paths to caller rule tests and policy files.
 
 Every language workflow also requires `caller_job`, the job ID in the caller workflow that invokes it. The floor ratchet reads that job's base floor, so different jobs may use different floors.
 
@@ -44,7 +44,6 @@ jobs:
     uses: sh4i-yurei/ci-workflows/.github/workflows/python.yml@0123456789abcdef0123456789abcdef01234567
     with:
       coverage_floor: 80
-      coverage_package: my_package
       install_command: python -m pip install -e '.[test]'
       caller_workflow: .github/workflows/ci.yml
       caller_job: tests

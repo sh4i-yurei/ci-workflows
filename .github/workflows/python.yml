@@ -5,9 +5,6 @@ on:
       coverage_floor:
         required: true
         type: number
-      coverage_package:
-        required: true
-        type: string
       install_command:
         required: true
         type: string
@@ -44,9 +41,7 @@ jobs:
         env:
           INSTALL_COMMAND: ${{ inputs.install_command }}
       - name: Run tests with branch coverage
-        run: python -m pytest --cov="$COVERAGE_PACKAGE" --cov-branch --cov-report=xml
-        env:
-          COVERAGE_PACKAGE: ${{ inputs.coverage_package }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh test-python
       - name: Check floor ratchet
         shell: bash
         env:
