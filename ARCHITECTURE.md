@@ -10,6 +10,10 @@ coverage tool, then hands the results to one Python command-line tool, `ci_workf
 every pass or fail decision. Shell logic the workflows share lives in one script. Nothing in a
 workflow file decides a verdict on its own.
 
+The PowerShell workflow runs Pester 5.7.1 under Windows PowerShell 5.1 on a Windows runner,
+matching the caller's runtime. It uploads its JaCoCo report for a dependent Ubuntu job to run
+the existing floor and changed-line gates. Those shared shell and Python gates are tested on Linux.
+
 ```
 caller repository
   └─ .github/workflows/*.yml  (workflow_call, pinned by commit SHA)

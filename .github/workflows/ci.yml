@@ -18,3 +18,11 @@ jobs:
       install_command: python -m pip install -e '.[test]'
       caller_workflow: .github/workflows/ci.yml
       caller_job: checks
+  powershell:
+    uses: ./.github/workflows/powershell.yml
+    with:
+      coverage_floor: 100
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: powershell
+      source_path: tests/fixtures/powershell/covered/src
+      tests_path: tests/fixtures/powershell/covered/test

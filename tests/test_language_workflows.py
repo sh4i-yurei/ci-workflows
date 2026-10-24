@@ -149,22 +149,99 @@ def test_powershell_workflow_runs_pester_with_jacoco():
         }
     }
     assert document["permissions"] == {"contents": "read"}
-    steps = document["jobs"]["checks"]["steps"]
+    assert set(document["jobs"]) == {"tests", "checks"}
+    test_job = document["jobs"]["tests"]
+    assert test_job["runs-on"] == "windows-latest"
+    steps = test_job["steps"]
     assert {step["name"] for step in steps} == {
+        "Check out caller",
+        "Install Pester 5",
+        "Run Pester with JaCoCo",
+        "Upload coverage report",
+    }
+    assert all(step["shell"] == "powershell" for step in steps if "run" in step)
+    install = next(step for step in steps if step["name"] == "Install Pester 5")
+    assert install["run"] == (
+        "Install-Module -Name Pester -RequiredVersion 5.7.1 "
+        "-Scope CurrentUser -Force -SkipPublisherCheck"
+    )
+    pester = next(step for step in steps if step["name"] == "Run Pester with JaCoCo")
+    assert pester["env"] == {
+        "SOURCE_PATH": "${{ inputs.source_path }}",
+        "TESTS_PATH": "${{ inputs.tests_path }}",
+    }
+    assert "Import-Module Pester -RequiredVersion 5.7.1" in pester["run"]
+    assert "$PSVersionTable.PSEdition" in pester["run"]
+    assert "$PSVersionTable.PSVersion" in pester["run"]
+    assert "(Get-Module Pester).Version" in pester["run"]
+    assert "$config.Run.Exit = $true" in pester["run"]
+    assert "$config.CodeCoverage.OutputFormat = 'CoverageGutters'" in pester["run"]
+    upload = next(step for step in steps if step["name"] == "Upload coverage report")
+    assert (
+        upload["uses"]
+        == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
+    assert upload["with"] == {
+        "name": "powershell-coverage",
+        "path": "coverage-jacoco.xml",
+        "if-no-files-found": "error",
+    }
+
+    gate_job = document["jobs"]["checks"]
+    assert gate_job["runs-on"] == "ubuntu-latest"
+    assert gate_job["needs"] == "tests"
+    gate_steps = gate_job["steps"]
+    assert {step["name"] for step in gate_steps} == {
         "Check out caller",
         "Check out pinned shared checks",
         "Set up Python",
         "Install shared checks",
-        "Install Pester 5",
-        "Run Pester with JaCoCo",
+        "Download coverage report",
         "Check floor ratchet",
         "Check changed lines",
     }
-    changed = next(step for step in steps if step["name"] == "Check changed lines")
+    download = next(
+        step for step in gate_steps if step["name"] == "Download coverage report"
+    )
+    assert (
+        download["uses"]
+        == "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+    )
+    assert download["with"] == {"name": "powershell-coverage"}
+    floor = next(step for step in gate_steps if step["name"] == "Check floor ratchet")
+    assert floor["env"] == {
+        "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
+        "COVERAGE_FLOOR": "${{ inputs.coverage_floor }}",
+        "CALLER_WORKFLOW": "${{ inputs.caller_workflow }}",
+        "CALLER_JOB": "${{ inputs.caller_job }}",
+    }
+    assert (
+        floor["run"]
+        == "bash .ci-workflows/scripts/workflow-glue.sh floor powershell coverage-jacoco.xml"
+    )
+    changed = next(step for step in gate_steps if step["name"] == "Check changed lines")
+    assert (
+        changed["env"]["BASE_SHA"]
+        == "${{ github.event.pull_request.base.sha || github.event.before }}"
+    )
     assert changed["env"]["SOURCE_PATH"] == "${{ inputs.source_path }}"
     assert (
         changed["run"]
         == "bash .ci-workflows/scripts/workflow-glue.sh changed powershell coverage-jacoco.xml"
     )
-    pester = next(step for step in steps if step["name"] == "Run Pester with JaCoCo")
-    assert "$config.CodeCoverage.OutputFormat = 'CoverageGutters'" in pester["run"]
+
+
+def test_ci_runs_covered_powershell_sample_on_push():
+    document = workflow("ci.yml")
+    assert document["on"]["push"] == {}
+    assert "powershell" in document["jobs"]
+    assert (
+        document["jobs"]["powershell"]["uses"] == "./.github/workflows/powershell.yml"
+    )
+    assert document["jobs"]["powershell"]["with"] == {
+        "coverage_floor": "100",
+        "caller_workflow": ".github/workflows/ci.yml",
+        "caller_job": "powershell",
+        "source_path": "tests/fixtures/powershell/covered/src",
+        "tests_path": "tests/fixtures/powershell/covered/test",
+    }
