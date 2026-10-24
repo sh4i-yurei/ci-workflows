@@ -63,16 +63,22 @@
 - mutant: ci_workflows.checks.x_changed_lines__mutmut_175
   reason: Passing cwd set to the current directory to subprocess.run is equivalent
     to omitting cwd.
+- mutant: ci_workflows.checks.x_floor_check__mutmut_18
+  reason: When the head workflow has no jobs key, {} and None both reach the
+    same missing-caller-job configuration error through the type check.
+- mutant: ci_workflows.checks.x_floor_check__mutmut_20
+  reason: When the head workflow has no jobs key, omitting the get default and
+    passing {} both reach the same missing-caller-job configuration error.
 - mutant: ci_workflows.checks.x_main__mutmut_36
   reason: The source-root argument is converted to a string and then to Path inside
     changed_lines, whether argparse initially supplied a Path or a string.
 - mutant: ci_workflows.checks.x_main__mutmut_38
   reason: The source-root argument is converted to a string and then to Path inside
     changed_lines, whether argparse initially supplied a Path or a string.
-- mutant: ci_workflows.checks.x_main__mutmut_409
+- mutant: ci_workflows.checks.x_main__mutmut_417
   reason: When TS_ACCESS_TOKEN is absent, None and the empty string are both falsey
     and both select federated token retrieval.
-- mutant: ci_workflows.checks.x_main__mutmut_411
+- mutant: ci_workflows.checks.x_main__mutmut_419
   reason: When TS_ACCESS_TOKEN is absent, the omitted get default and the empty string
     are both falsey and both select federated token retrieval.
 - mutant: ci_workflows.checks.x_select_functions__mutmut_21
