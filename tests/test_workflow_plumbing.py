@@ -214,7 +214,7 @@ def test_floor_and_changed_gates_pass_base_and_exact_diff(commits, tmp_path):
         'printf \'%s\\n\' "$@" >> "$CALL_LOG"\n'
         "if [[ $3 == floor ]]; then\n"
         "  while (( $# )); do\n"
-        '    if [[ $1 == --base-workflow ]]; then cat "$2" >> "$CALL_LOG"; fi\n'
+        '    if [[ $1 == --base-workflow || $1 == --head-workflow ]]; then cat "$2" >> "$CALL_LOG"; fi\n'
         "    shift\n"
         "  done\n"
         'elif [[ $3 == changed-lines ]]; then cat >> "$DIFF_LOG"; fi\n'
@@ -232,13 +232,19 @@ def test_floor_and_changed_gates_pass_base_and_exact_diff(commits, tmp_path):
     }
     floor = run(repo, "floor", "python", "coverage.xml", base_sha=base, extra_env=env)
     assert (floor.returncode, floor.stdout, floor.stderr) == (0, "", "")
-    calls = call_log.read_text()
-    assert "floor\n--kind\npython\n--report\ncoverage.xml\n--head-floor\n90\n" in calls
-    assert "--caller-job\nchecks\njobs: {}\n" in calls
+    assert call_log.read_text() == (
+        "-m\nci_workflows\nfloor\n--kind\npython\n--report\ncoverage.xml\n"
+        "--head-floor\n90\n--head-workflow\nci.yml\n--caller-job\nchecks\n"
+        "--base-workflow\n/dev/stdin\njobs: {}\njobs: {}\n"
+    )
     call_log.write_text("")
     no_base = run(repo, "floor", "python", "coverage.xml", extra_env=env)
-    assert no_base.returncode == 0
-    assert "--base-workflow" not in call_log.read_text()
+    assert (no_base.returncode, no_base.stdout, no_base.stderr) == (0, "", "")
+    assert call_log.read_text() == (
+        "-m\nci_workflows\nfloor\n--kind\npython\n--report\ncoverage.xml\n"
+        "--head-floor\n90\n--head-workflow\nci.yml\n--caller-job\nchecks\n"
+        "jobs: {}\n"
+    )
     changed = run(
         repo, "changed", "python", "coverage.xml", base_sha=base, extra_env=env
     )

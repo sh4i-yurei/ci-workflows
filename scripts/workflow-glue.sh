@@ -64,8 +64,11 @@ floor_gate() {
   local base
   base=$(resolved_base)
   local -a args=(floor --kind "$kind" --report "$report" --head-floor "$COVERAGE_FLOOR")
+  if [[ -n ${CALLER_JOB:-} ]]; then
+    args+=(--head-workflow "$CALLER_WORKFLOW" --caller-job "$CALLER_JOB")
+  fi
   if git cat-file -e "$base:$CALLER_WORKFLOW" 2>/dev/null; then
-    git show "$base:$CALLER_WORKFLOW" | "$PYTHON" -m ci_workflows "${args[@]}" --base-workflow /dev/stdin --caller-job "$CALLER_JOB"
+    git show "$base:$CALLER_WORKFLOW" | "$PYTHON" -m ci_workflows "${args[@]}" --base-workflow /dev/stdin
   else
     "$PYTHON" -m ci_workflows "${args[@]}"
   fi
