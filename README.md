@@ -9,7 +9,7 @@ These public reusable GitHub Actions workflows run the checks in the testing sta
 | `python.yml` | pytest branch coverage, changed lines, floor, and mutmut survivors |
 | `javascript.yml` | Node test runner branch coverage, changed lines, floor, and Stryker survivors |
 | `shell.yml` | Bats under kcov, changed lines, and floor |
-| `powershell.yml` | Pester 5 coverage, changed lines, and floor |
+| `powershell.yml` | Pester 5.7.1 tests on Windows PowerShell 5.1; changed lines and floor on Linux |
 | `molecule.yml` | Caller Molecule scenarios under rootless Podman |
 | `prometheus.yml` | promtool tests and every alert's firing and quiet cases |
 | `tailscale.yml` | Tailscale validate tests of the policy and three mutations per grant or ACL |
@@ -24,7 +24,7 @@ The JavaScript workflow requires `install_command`, `caller_workflow`, and `muta
 
 The shell workflow requires `caller_workflow`, `source_path` (the shell source directory for kcov), and `tests_path` (a Bats test file or directory). kcov writes Cobertura XML to `.coverage-shell/cov.xml`.
 
-The PowerShell workflow requires `caller_workflow`, `source_path` (the scripts to measure), and `tests_path` (a Pester test file or directory). Pester 5 writes JaCoCo XML to `coverage-jacoco.xml`.
+The PowerShell workflow requires `caller_workflow`, `source_path` (the scripts to measure), and `tests_path` (a Pester test file or directory). Its Windows job runs the tests under Windows PowerShell 5.1 with Pester 5.7.1 and uploads `coverage-jacoco.xml`. The dependent Linux job downloads that report and runs the floor and changed-line gates there, where the shared shell and Python checks are tested. Pester writes repository-relative JaCoCo paths with forward slashes, so the gates can read the Windows report on Linux.
 
 The Molecule workflow requires `scenarios`, a JSON list of caller scenario names such as `["default"]`. It runs each scenario with `molecule test` on an Ubuntu runner using rootless Podman; the caller scenario defines its container images and verify assertions. Each caller scenario must read `PODMAN_EXECUTABLE` for the Podman command, because the workflow sets that variable to the runner's executable.
 

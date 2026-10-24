@@ -20,8 +20,41 @@ on:
 permissions:
   contents: read
 jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Pester 5
+        shell: powershell
+        run: Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Run Pester with JaCoCo
+        shell: powershell
+        env:
+          SOURCE_PATH: ${{ inputs.source_path }}
+          TESTS_PATH: ${{ inputs.tests_path }}
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          Write-Host "PSEdition $($PSVersionTable.PSEdition)"
+          Write-Host "PSVersion $($PSVersionTable.PSVersion)"
+          Write-Host "Pester $((Get-Module Pester).Version)"
+          $config = New-PesterConfiguration
+          $config.Run.Path = $env:TESTS_PATH
+          $config.Run.Exit = $true
+          $config.CodeCoverage.Enabled = $true
+          $config.CodeCoverage.Path = $env:SOURCE_PATH
+          $config.CodeCoverage.OutputFormat = 'CoverageGutters'
+          $config.CodeCoverage.OutputPath = 'coverage-jacoco.xml'
+          Invoke-Pester -Configuration $config
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: powershell-coverage
+          path: coverage-jacoco.xml
+          if-no-files-found: error
   checks:
     runs-on: ubuntu-latest
+    needs: tests
     steps:
       - name: Check out caller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,24 +72,10 @@ jobs:
           python-version: '3.12'
       - name: Install shared checks
         run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
-      - name: Install Pester 5
-        shell: pwsh
-        run: Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
-      - name: Run Pester with JaCoCo
-        shell: pwsh
-        env:
-          SOURCE_PATH: ${{ inputs.source_path }}
-          TESTS_PATH: ${{ inputs.tests_path }}
-        run: |
-          Import-Module Pester -RequiredVersion 5.7.1
-          $config = New-PesterConfiguration
-          $config.Run.Path = $env:TESTS_PATH
-          $config.Run.Exit = $true
-          $config.CodeCoverage.Enabled = $true
-          $config.CodeCoverage.Path = $env:SOURCE_PATH
-          $config.CodeCoverage.OutputFormat = 'CoverageGutters'
-          $config.CodeCoverage.OutputPath = 'coverage-jacoco.xml'
-          Invoke-Pester -Configuration $config
+      - name: Download coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: powershell-coverage
       - name: Check floor ratchet
         shell: bash
         env:
