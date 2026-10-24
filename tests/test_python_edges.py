@@ -14,6 +14,13 @@ import pytest
 from ci_workflows.checks import main
 
 
+FIXTURES = Path(__file__).parent / "fixtures"
+# keepbreathing-infra .github/workflows/ci.yml at 2c6d2ccc2e18167248aba3898ffa3a643bf73c02.
+INFRA_BASE = FIXTURES / "infra-ci-before-python.yml"
+# keepbreathing-infra .github/workflows/ci.yml at c0f328efdb7c2b33b2a37f6cc3685b61d962d64c.
+INFRA_HEAD = FIXTURES / "infra-ci-with-python.yml"
+
+
 def invoke(*args):
     stdout, stderr = io.StringIO(), io.StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -352,20 +359,79 @@ def test_named_caller_job_floor_cannot_fall(tmp_path):
     ) == (1, "coverage floor fell from 80% to 79%\n", "")
 
 
-def test_floor_reports_missing_caller_job(tmp_path):
-    workflow = tmp_path / "ci.yml"
-    workflow.write_text("jobs:\n  python:\n    with:\n      coverage_floor: 80\n")
+def test_floor_accepts_new_python_job(tmp_path):
     assert invoke(
         "floor",
         "--report",
-        report(tmp_path),
+        report(tmp_path, rate="1"),
         "--head-floor",
-        "80",
+        "100",
         "--base-workflow",
+        INFRA_BASE,
+        "--head-workflow",
+        INFRA_HEAD,
+        "--caller-job",
+        "python",
+    ) == (0, "coverage 100.0% meets floor 100%\n", "")
+
+
+@pytest.mark.parametrize("base", [INFRA_BASE, INFRA_HEAD, None])
+def test_floor_rejects_missing_head_job(tmp_path, base):
+    args = ["floor", "--report", report(tmp_path, rate="1"), "--head-floor", "100"]
+    if base is not None:
+        args.extend(["--base-workflow", base])
+    args.extend(["--head-workflow", INFRA_BASE, "--caller-job", "python"])
+    assert invoke(*args) == (
+        2,
+        "configuration error: caller workflow has no job 'python'\n",
+        "",
+    )
+
+
+def test_floor_new_head_keeps_existing_ratchet(tmp_path):
+    assert invoke(
+        "floor",
+        "--report",
+        report(tmp_path, rate="1"),
+        "--head-floor",
+        "90",
+        "--base-workflow",
+        INFRA_HEAD,
+        "--head-workflow",
+        INFRA_HEAD,
+        "--caller-job",
+        "python",
+    ) == (1, "coverage floor fell from 100% to 90%\n", "")
+
+
+def test_floor_new_head_with_no_base_workflow(tmp_path):
+    assert invoke(
+        "floor",
+        "--report",
+        report(tmp_path, rate="1"),
+        "--head-floor",
+        "100",
+        "--head-workflow",
+        INFRA_HEAD,
+        "--caller-job",
+        "python",
+    ) == (0, "coverage 100.0% meets floor 100%\n", "")
+
+
+def test_floor_rejects_head_workflow_without_yaml_mapping(tmp_path):
+    workflow = tmp_path / "ci.yml"
+    workflow.write_text("no jobs\n")
+    assert invoke(
+        "floor",
+        "--report",
+        report(tmp_path, rate="1"),
+        "--head-floor",
+        "100",
+        "--head-workflow",
         workflow,
         "--caller-job",
-        "shell",
-    ) == (2, "configuration error: base workflow has no job 'shell'\n", "")
+        "python",
+    ) == (2, "configuration error: caller workflow must be a YAML mapping\n", "")
 
 
 def test_floor_first_run_when_named_base_job_has_no_floor(tmp_path):
@@ -379,6 +445,8 @@ def test_floor_first_run_when_named_base_job_has_no_floor(tmp_path):
         "80",
         "--base-workflow",
         workflow,
+        "--head-workflow",
+        INFRA_HEAD,
         "--caller-job",
         "python",
     ) == (0, "coverage 85.0% meets floor 80%\n", "")
@@ -395,6 +463,8 @@ def test_floor_first_run_when_named_base_job_has_empty_with(tmp_path):
         "80",
         "--base-workflow",
         workflow,
+        "--head-workflow",
+        INFRA_HEAD,
         "--caller-job",
         "python",
     ) == (0, "coverage 85.0% meets floor 80%\n", "")

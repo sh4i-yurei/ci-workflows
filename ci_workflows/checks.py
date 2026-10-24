@@ -287,7 +287,7 @@ def _base_floor(workflow: Path, caller_job: str | None) -> Decimal | None:
     jobs = document.get("jobs", {})
     if caller_job is not None:
         if not isinstance(jobs, dict) or caller_job not in jobs:
-            raise ConfigurationError(f"base workflow has no job {caller_job!r}")
+            return None
         job = jobs[caller_job]
         if not isinstance(job, dict) or not isinstance(job.get("with"), dict):
             return None
@@ -313,8 +313,16 @@ def floor_check(
     base_workflow: Path | None,
     kind: str,
     caller_job: str | None = None,
+    head_workflow: Path | None = None,
 ) -> tuple[int, str]:
     head = _floor(head_floor)
+    if head_workflow is not None and caller_job is not None:
+        document = yaml.load(head_workflow.read_text(), Loader=yaml.BaseLoader)
+        if not isinstance(document, dict):
+            raise ConfigurationError("caller workflow must be a YAML mapping")
+        jobs = document.get("jobs", {})
+        if not isinstance(jobs, dict) or caller_job not in jobs:
+            raise ConfigurationError(f"caller workflow has no job {caller_job!r}")
     base = _base_floor(base_workflow, caller_job) if base_workflow else None
     if base is not None and head < base:
         return 1, f"coverage floor fell from {base:g}% to {head:g}%"
@@ -607,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     floor.add_argument("--report", type=Path, required=True)
     floor.add_argument("--head-floor", required=True)
     floor.add_argument("--base-workflow", type=Path)
+    floor.add_argument("--head-workflow", type=Path)
     floor.add_argument("--caller-job")
     floor.add_argument(
         "--kind",
@@ -664,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.base_workflow,
                 args.kind,
                 args.caller_job,
+                args.head_workflow,
             )
         elif args.command == "select-functions":
             selected, gaps = select_functions(
