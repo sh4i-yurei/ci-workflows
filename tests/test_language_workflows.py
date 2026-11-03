@@ -14,6 +14,30 @@ def workflow(name):
     )
 
 
+def test_base_sha_steps_pass_branch_context_only_to_glue():
+    base = "${{ github.event.pull_request.base.sha || github.event.before }}"
+    branch = "${{ github.event.repository.default_branch }}"
+    pushed = "${{ github.event_name == 'push' && github.ref_name || '' }}"
+    counts = {"python.yml": 3, "javascript.yml": 3, "shell.yml": 2, "powershell.yml": 2}
+    for name, count in counts.items():
+        steps = [
+            step for job in workflow(name)["jobs"].values() for step in job["steps"]
+        ]
+        base_steps = [
+            step for step in steps if step.get("env", {}).get("BASE_SHA") == base
+        ]
+        assert len(base_steps) == count
+        for step in base_steps:
+            assert step["env"]["DEFAULT_BRANCH"] == branch
+            assert step["env"]["PUSHED_REF"] == pushed
+        assert [
+            step["name"] for step in steps if "DEFAULT_BRANCH" in step.get("env", {})
+        ] == [step["name"] for step in base_steps]
+        assert [
+            step["name"] for step in steps if "PUSHED_REF" in step.get("env", {})
+        ] == [step["name"] for step in base_steps]
+
+
 def test_javascript_workflow_runs_branch_coverage_and_changed_mutations():
     document = workflow("javascript.yml")
     assert document["on"] == {
@@ -211,6 +235,8 @@ def test_powershell_workflow_runs_pester_with_jacoco():
     floor = next(step for step in gate_steps if step["name"] == "Check floor ratchet")
     assert floor["env"] == {
         "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.before }}",
+        "DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+        "PUSHED_REF": "${{ github.event_name == 'push' && github.ref_name || '' }}",
         "COVERAGE_FLOOR": "${{ inputs.coverage_floor }}",
         "CALLER_WORKFLOW": "${{ inputs.caller_workflow }}",
         "CALLER_JOB": "${{ inputs.caller_job }}",
