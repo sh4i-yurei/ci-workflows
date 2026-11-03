@@ -119,7 +119,7 @@ def test_readme_documents_workflow_contract():
             "",
             False,
             2,
-            "configuration error: mutmut source_paths must be a non-empty list\n",
+            "configuration error: source paths must be a non-empty list\n",
         ),
     ],
 )

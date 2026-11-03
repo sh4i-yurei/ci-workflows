@@ -24,5 +24,13 @@ jobs:
       coverage_floor: 100
       caller_workflow: .github/workflows/ci.yml
       caller_job: powershell
-      source_path: tests/fixtures/powershell/covered/src
-      tests_path: tests/fixtures/powershell/covered/test
+      source_paths: '["tests/fixtures/powershell/two-folders/first", "tests/fixtures/powershell/two-folders/second"]'
+      tests_path: tests/fixtures/powershell/two-folders/test
+  shell:
+    uses: ./.github/workflows/shell.yml
+    with:
+      coverage_floor: 100
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: shell
+      source_paths: '["tests/fixtures/shell/two-folders/first", "tests/fixtures/shell/two-folders/second"]'
+      tests_path: tests/fixtures/shell/two-folders/test

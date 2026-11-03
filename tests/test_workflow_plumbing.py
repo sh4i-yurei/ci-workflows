@@ -34,6 +34,37 @@ def run(repo, *args, base_sha="", input_text="", extra_env=None):
     )
 
 
+@pytest.mark.parametrize(
+    ("sources", "expected"),
+    [
+        (
+            '["hooks", "skills/buildlog/scripts"]',
+            (0, "hooks,skills/buildlog/scripts\n", ""),
+        ),
+        (
+            '["hooks", "odd,name"]',
+            (2, "", "kcov source path contains a comma: odd,name\n"),
+        ),
+        ("[]", (2, "", "configuration error: source paths must be a non-empty list\n")),
+        (
+            '"hooks"',
+            (2, "", "configuration error: source paths must be a non-empty list\n"),
+        ),
+        (
+            '["hooks", 1]',
+            (2, "", "configuration error: source paths must be a non-empty list\n"),
+        ),
+        (
+            '[""]',
+            (2, "", "configuration error: source paths must be a non-empty list\n"),
+        ),
+    ],
+)
+def test_kcov_paths_uses_validated_json_list(tmp_path, sources, expected):
+    result = run(tmp_path, "kcov-paths", extra_env={"SOURCE_PATHS": sources})
+    assert (result.returncode, result.stdout, result.stderr) == expected
+
+
 def test_python_coverage_arguments_follow_two_declared_sources(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
         '[tool.mutmut]\nsource_paths = ["hooks", "scripts"]\n'
@@ -67,7 +98,7 @@ def test_python_coverage_stops_before_pytest_on_invalid_sources(tmp_path):
     assert (result.returncode, result.stdout, result.stderr) == (
         2,
         "",
-        "configuration error: mutmut source_paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )
     assert not (tmp_path / "coverage.xml").exists()
 
@@ -361,6 +392,43 @@ def test_unreachable_base_fails_floor_and_diff(commits, tmp_path):
     )
     assert floor.returncode != 0
     assert "base SHA" in floor.stderr
+
+
+@pytest.mark.parametrize("kind", ["shell", "powershell"])
+def test_changed_glue_passes_source_list_for_both_workflows(commits, tmp_path, kind):
+    repo, base = commits
+    wrapper = tmp_path / "python"
+    wrapper.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$CALL_LOG"\ncat >/dev/null\n'
+    )
+    wrapper.chmod(0o755)
+    call_log = tmp_path / "calls"
+    result = run(
+        repo,
+        "changed",
+        kind,
+        "coverage.xml",
+        base_sha=base,
+        extra_env={
+            "PYTHON": str(wrapper),
+            "CALL_LOG": str(call_log),
+            "SOURCE_PATHS": '["hooks", "skills/buildlog/scripts"]',
+        },
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert call_log.read_text().splitlines() == [
+        "-m",
+        "ci_workflows",
+        "changed-lines",
+        "--kind",
+        kind,
+        "--report",
+        "coverage.xml",
+        "--diff-file",
+        "/dev/stdin",
+        "--source-roots-json",
+        '["hooks", "skills/buildlog/scripts"]',
+    ]
 
 
 def test_floor_and_changed_gates_pass_base_and_exact_diff(commits, tmp_path):
