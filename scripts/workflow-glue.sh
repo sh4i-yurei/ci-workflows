@@ -4,6 +4,20 @@ set -euo pipefail
 PYTHON=${PYTHON:-python}
 
 resolved_base() {
+  if [[ -n ${PUSHED_REF:-} && -n ${DEFAULT_BRANCH:-} && $PUSHED_REF != "$DEFAULT_BRANCH" ]]; then
+    local default_ref="refs/remotes/origin/$DEFAULT_BRANCH" common
+    if ! git show-ref --verify --quiet "$default_ref"; then
+      echo "default branch is not an available ref: origin/$DEFAULT_BRANCH" >&2
+      return 2
+    fi
+    if ! common=$(git merge-base HEAD "$default_ref"); then
+      echo "default branch has no common ancestor with HEAD: origin/$DEFAULT_BRANCH" >&2
+      return 2
+    fi
+    echo "base $common is the merge base of HEAD and origin/$DEFAULT_BRANCH" >&2
+    printf '%s\n' "$common"
+    return
+  fi
   if [[ -z ${BASE_SHA:-} || ${BASE_SHA} =~ ^0+$ ]]; then
     git hash-object -t tree /dev/null
     return

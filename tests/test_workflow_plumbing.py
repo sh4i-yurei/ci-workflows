@@ -16,7 +16,8 @@ GLUE = ROOT / "scripts/workflow-glue.sh"
 
 def run(repo, *args, base_sha="", input_text="", extra_env=None):
     env = {
-        **os.environ,
+        "PATH": os.environ["PATH"],
+        "HOME": str(repo),
         "BASE_SHA": base_sha,
         "PYTHONPATH": str(ROOT),
         "PYTHON": sys.executable,
@@ -129,6 +130,162 @@ def commits(tmp_path):
     git("add", ".")
     git("commit", "-qm", "head")
     return tmp_path, base
+
+
+def git(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def feature_branch(repo, base):
+    git(repo, "branch", "-M", "feature")
+    git(repo, "update-ref", "refs/remotes/origin/main", base)
+
+
+@pytest.mark.parametrize("base_sha", ["", "0" * 40])
+def test_feature_push_uses_merge_base_for_diff(commits, base_sha):
+    repo, base = commits
+    feature_branch(repo, base)
+    result = run(
+        repo,
+        "diff",
+        "names",
+        base_sha=base_sha,
+        extra_env={"DEFAULT_BRANCH": "main", "PUSHED_REF": "feature"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "src/app.js\nsrc/app.py\n",
+        f"base {base} is the merge base of HEAD and origin/main\n",
+    )
+
+
+def test_second_feature_push_still_compares_whole_branch(commits):
+    repo, base = commits
+    feature_branch(repo, base)
+    previous = git(repo, "rev-parse", "HEAD")
+    (repo / "src/first.py").write_text("first = True\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "third")
+    result = run(
+        repo,
+        "diff",
+        "names",
+        base_sha=previous,
+        extra_env={"DEFAULT_BRANCH": "main", "PUSHED_REF": "feature"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "src/app.js\nsrc/app.py\nsrc/first.py\n",
+        f"base {base} is the merge base of HEAD and origin/main\n",
+    )
+
+
+def test_feature_push_reads_default_branch_workflow(commits):
+    repo, base = commits
+    git(repo, "reset", "--hard", base)
+    feature_branch(repo, base)
+    (repo / "ci.yml").write_text("jobs: {a: {}}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "first feature")
+    previous = git(repo, "rev-parse", "HEAD")
+    (repo / "src/app.py").write_text("x = 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "second feature")
+    result = run(
+        repo,
+        "base-workflow",
+        "ci.yml",
+        base_sha=previous,
+        extra_env={"DEFAULT_BRANCH": "main", "PUSHED_REF": "feature"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "jobs: {}\n",
+        f"base {base} is the merge base of HEAD and origin/main\n",
+    )
+
+
+@pytest.mark.parametrize(
+    "base_sha, expected",
+    [
+        ("0" * 40, "ci.yml\npyproject.toml\nsrc/app.js\nsrc/app.py\n"),
+        ("commit", "src/app.js\nsrc/app.py\n"),
+    ],
+)
+def test_default_branch_push_keeps_before(commits, base_sha, expected):
+    repo, base = commits
+    result = run(
+        repo,
+        "diff",
+        "names",
+        base_sha=base if base_sha == "commit" else base_sha,
+        extra_env={"DEFAULT_BRANCH": "main", "PUSHED_REF": "main"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, expected, "")
+
+
+def test_pull_request_keeps_base_sha(commits):
+    repo, base = commits
+    result = run(
+        repo,
+        "diff",
+        "names",
+        base_sha=base,
+        extra_env={"DEFAULT_BRANCH": "main", "PUSHED_REF": ""},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "src/app.js\nsrc/app.py\n",
+        "",
+    )
+
+
+def test_feature_push_requires_default_ref_for_diff_and_floor(commits, tmp_path):
+    repo, base = commits
+    git(repo, "branch", "-M", "feature")
+    vars = {"DEFAULT_BRANCH": "main", "PUSHED_REF": "feature"}
+    diff = run(repo, "diff", "names", base_sha=base, extra_env=vars)
+    assert (diff.returncode, diff.stdout, diff.stderr) == (
+        2,
+        "",
+        "default branch is not an available ref: origin/main\n",
+    )
+    wrapper = tmp_path / "python"
+    wrapper.write_text("#!/usr/bin/env bash\nexit 0\n")
+    wrapper.chmod(0o755)
+    floor = run(
+        repo,
+        "floor",
+        "python",
+        "coverage.xml",
+        base_sha=base,
+        extra_env={
+            **vars,
+            "PYTHON": str(wrapper),
+            "COVERAGE_FLOOR": "90",
+            "CALLER_WORKFLOW": "ci.yml",
+            "CALLER_JOB": "checks",
+        },
+    )
+    assert (floor.returncode, floor.stdout, floor.stderr) == (
+        2,
+        "",
+        "default branch is not an available ref: origin/main\n",
+    )
+
+
+def test_run_does_not_inherit_runner_branch_variables(commits, monkeypatch):
+    repo, base = commits
+    monkeypatch.setenv("PUSHED_REF", "feature")
+    monkeypatch.setenv("DEFAULT_BRANCH", "main")
+    result = run(repo, "diff", "names", base_sha=base)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "src/app.js\nsrc/app.py\n",
+        "",
+    )
 
 
 @pytest.mark.parametrize("base_kind", ["empty", "zero", "commit"])

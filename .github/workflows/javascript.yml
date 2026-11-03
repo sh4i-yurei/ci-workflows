@@ -53,6 +53,8 @@ jobs:
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
           COVERAGE_FLOOR: ${{ inputs.coverage_floor }}
           CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
           CALLER_JOB: ${{ inputs.caller_job }}
@@ -61,11 +63,15 @@ jobs:
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
           MUTATION_SOURCES: ${{ inputs.mutation_sources }}
         run: bash .ci-workflows/scripts/workflow-glue.sh changed javascript coverage.lcov
       - name: Mutate changed JavaScript
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
           MUTATION_SOURCES: ${{ inputs.mutation_sources }}
         run: bash .ci-workflows/scripts/workflow-glue.sh mutate-javascript
