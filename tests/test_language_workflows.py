@@ -151,6 +151,7 @@ def test_shell_workflow_runs_bats_under_kcov():
         "include_paths=$(bash .ci-workflows/scripts/workflow-glue.sh kcov-paths)\n"
         'kcov --cobertura-only --include-path="$include_paths" '
         '.coverage-shell /usr/bin/bats "$TESTS_PATH"\n'
+        "sed -n '/<class /p' .coverage-shell/cov.xml\n"
     )
     assert coverage["env"] == {
         "SOURCE_PATHS": "${{ inputs.source_paths }}",
@@ -208,6 +209,9 @@ def test_powershell_workflow_runs_pester_with_jacoco():
     assert "$config.CodeCoverage.OutputFormat = 'CoverageGutters'" in pester["run"]
     assert "ConvertFrom-Json" in pester["run"]
     assert "$config.CodeCoverage.Path" in pester["run"]
+    assert (
+        "Select-String -Path coverage-jacoco.xml -Pattern 'sourcefile'" in pester["run"]
+    )
     upload = next(step for step in steps if step["name"] == "Upload coverage report")
     assert (
         upload["uses"]

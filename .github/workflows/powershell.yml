@@ -46,7 +46,11 @@ jobs:
           $config.CodeCoverage.Path = $sourcePaths
           $config.CodeCoverage.OutputFormat = 'CoverageGutters'
           $config.CodeCoverage.OutputPath = 'coverage-jacoco.xml'
-          Invoke-Pester -Configuration $config
+          try {
+              Invoke-Pester -Configuration $config
+          } finally {
+              Select-String -Path coverage-jacoco.xml -Pattern 'sourcefile'
+          }
       - name: Upload coverage report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

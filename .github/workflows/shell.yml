@@ -45,6 +45,7 @@ jobs:
         run: |
           include_paths=$(bash .ci-workflows/scripts/workflow-glue.sh kcov-paths)
           kcov --cobertura-only --include-path="$include_paths" .coverage-shell /usr/bin/bats "$TESTS_PATH"
+          sed -n '/<class /p' .coverage-shell/cov.xml
         env:
           SOURCE_PATHS: ${{ inputs.source_paths }}
           TESTS_PATH: ${{ inputs.tests_path }}
