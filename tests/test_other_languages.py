@@ -77,10 +77,7 @@ def test_real_kcov_report_refuses_absent_changed_source(
     )
     report = tmp_path / "coverage.xml"
     report.write_bytes(fixture.read_bytes())
-    first = patch(tmp_path, f"{base}/first/first.sh").read_text()
-    second = patch(tmp_path, f"{base}/second/second.sh").read_text()
-    diff = tmp_path / "both.patch"
-    diff.write_text(first + second)
+    diff = Path(__file__).parent / "fixtures/shell/two-folders/both-scripts.patch"
     assert invoke(
         "changed-lines",
         "--kind",
@@ -103,10 +100,7 @@ def test_real_kcov_report_names_only_uncovered_second_script_lines(tmp_path):
     fixture = Path(__file__).parent / "fixtures/shell/two-folders/reports/partial.xml"
     report = tmp_path / "coverage.xml"
     report.write_bytes(fixture.read_bytes())
-    first = patch(tmp_path, f"{base}/first/first.sh").read_text()
-    second = patch(tmp_path, f"{base}/second/second.sh", line=6).read_text()
-    diff = tmp_path / "both.patch"
-    diff.write_text(first + second)
+    diff = Path(__file__).parent / "fixtures/shell/two-folders/both-scripts.patch"
     assert invoke(
         "changed-lines",
         "--kind",
