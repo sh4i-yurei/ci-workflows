@@ -11,7 +11,7 @@ on:
       caller_job:
         required: true
         type: string
-      source_path:
+      source_paths:
         required: true
         type: string
       tests_path:
@@ -31,7 +31,7 @@ jobs:
       - name: Run Pester with JaCoCo
         shell: powershell
         env:
-          SOURCE_PATH: ${{ inputs.source_path }}
+          SOURCE_PATHS: ${{ inputs.source_paths }}
           TESTS_PATH: ${{ inputs.tests_path }}
         run: |
           Import-Module Pester -RequiredVersion 5.7.1
@@ -42,7 +42,8 @@ jobs:
           $config.Run.Path = $env:TESTS_PATH
           $config.Run.Exit = $true
           $config.CodeCoverage.Enabled = $true
-          $config.CodeCoverage.Path = $env:SOURCE_PATH
+          [string[]]$sourcePaths = ConvertFrom-Json -InputObject $env:SOURCE_PATHS
+          $config.CodeCoverage.Path = $sourcePaths
           $config.CodeCoverage.OutputFormat = 'CoverageGutters'
           $config.CodeCoverage.OutputPath = 'coverage-jacoco.xml'
           Invoke-Pester -Configuration $config
@@ -92,5 +93,5 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
-          SOURCE_PATH: ${{ inputs.source_path }}
+          SOURCE_PATHS: ${{ inputs.source_paths }}
         run: bash .ci-workflows/scripts/workflow-glue.sh changed powershell coverage-jacoco.xml

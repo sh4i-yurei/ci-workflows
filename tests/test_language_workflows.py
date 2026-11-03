@@ -129,7 +129,7 @@ def test_shell_workflow_runs_bats_under_kcov():
                 "coverage_floor": {"required": "true", "type": "number"},
                 "caller_workflow": {"required": "true", "type": "string"},
                 "caller_job": {"required": "true", "type": "string"},
-                "source_path": {"required": "true", "type": "string"},
+                "source_paths": {"required": "true", "type": "string"},
                 "tests_path": {"required": "true", "type": "string"},
             }
         }
@@ -148,11 +148,17 @@ def test_shell_workflow_runs_bats_under_kcov():
     }
     coverage = next(step for step in steps if step["name"] == "Run Bats under kcov")
     assert coverage["run"] == (
-        'kcov --cobertura-only --include-path="$SOURCE_PATH" '
-        '.coverage-shell /usr/bin/bats "$TESTS_PATH"'
+        "include_paths=$(bash .ci-workflows/scripts/workflow-glue.sh kcov-paths)\n"
+        'kcov --cobertura-only --include-path="$include_paths" '
+        '.coverage-shell /usr/bin/bats "$TESTS_PATH"\n'
     )
+    assert coverage["env"] == {
+        "SOURCE_PATHS": "${{ inputs.source_paths }}",
+        "TESTS_PATH": "${{ inputs.tests_path }}",
+    }
     changed = next(step for step in steps if step["name"] == "Check changed lines")
-    assert changed["env"]["SOURCE_PATH"] == "${{ inputs.source_path }}"
+    assert changed["env"]["SOURCE_PATHS"] == "${{ inputs.source_paths }}"
+    assert "SOURCE_PATH" not in changed["env"]
     assert (
         changed["run"]
         == "bash .ci-workflows/scripts/workflow-glue.sh changed shell .coverage-shell/cov.xml"
@@ -167,7 +173,7 @@ def test_powershell_workflow_runs_pester_with_jacoco():
                 "coverage_floor": {"required": "true", "type": "number"},
                 "caller_workflow": {"required": "true", "type": "string"},
                 "caller_job": {"required": "true", "type": "string"},
-                "source_path": {"required": "true", "type": "string"},
+                "source_paths": {"required": "true", "type": "string"},
                 "tests_path": {"required": "true", "type": "string"},
             }
         }
@@ -191,7 +197,7 @@ def test_powershell_workflow_runs_pester_with_jacoco():
     )
     pester = next(step for step in steps if step["name"] == "Run Pester with JaCoCo")
     assert pester["env"] == {
-        "SOURCE_PATH": "${{ inputs.source_path }}",
+        "SOURCE_PATHS": "${{ inputs.source_paths }}",
         "TESTS_PATH": "${{ inputs.tests_path }}",
     }
     assert "Import-Module Pester -RequiredVersion 5.7.1" in pester["run"]
@@ -200,6 +206,8 @@ def test_powershell_workflow_runs_pester_with_jacoco():
     assert "(Get-Module Pester).Version" in pester["run"]
     assert "$config.Run.Exit = $true" in pester["run"]
     assert "$config.CodeCoverage.OutputFormat = 'CoverageGutters'" in pester["run"]
+    assert "ConvertFrom-Json" in pester["run"]
+    assert "$config.CodeCoverage.Path" in pester["run"]
     upload = next(step for step in steps if step["name"] == "Upload coverage report")
     assert (
         upload["uses"]
@@ -250,17 +258,18 @@ def test_powershell_workflow_runs_pester_with_jacoco():
         changed["env"]["BASE_SHA"]
         == "${{ github.event.pull_request.base.sha || github.event.before }}"
     )
-    assert changed["env"]["SOURCE_PATH"] == "${{ inputs.source_path }}"
+    assert changed["env"]["SOURCE_PATHS"] == "${{ inputs.source_paths }}"
+    assert "SOURCE_PATH" not in changed["env"]
     assert (
         changed["run"]
         == "bash .ci-workflows/scripts/workflow-glue.sh changed powershell coverage-jacoco.xml"
     )
 
 
-def test_ci_runs_covered_powershell_sample_on_push():
+def test_ci_runs_two_folder_samples_on_push():
     document = workflow("ci.yml")
     assert document["on"]["push"] == {}
-    assert "powershell" in document["jobs"]
+    assert {"shell", "powershell"} <= set(document["jobs"])
     assert (
         document["jobs"]["powershell"]["uses"] == "./.github/workflows/powershell.yml"
     )
@@ -268,6 +277,16 @@ def test_ci_runs_covered_powershell_sample_on_push():
         "coverage_floor": "100",
         "caller_workflow": ".github/workflows/ci.yml",
         "caller_job": "powershell",
-        "source_path": "tests/fixtures/powershell/covered/src",
-        "tests_path": "tests/fixtures/powershell/covered/test",
+        "source_paths": '["tests/fixtures/powershell/two-folders/first", "tests/fixtures/powershell/two-folders/second"]',
+        "tests_path": "tests/fixtures/powershell/two-folders/test",
+    }
+    assert document["jobs"]["shell"] == {
+        "uses": "./.github/workflows/shell.yml",
+        "with": {
+            "coverage_floor": "100",
+            "caller_workflow": ".github/workflows/ci.yml",
+            "caller_job": "shell",
+            "source_paths": '["tests/fixtures/shell/two-folders/first", "tests/fixtures/shell/two-folders/second"]',
+            "tests_path": "tests/fixtures/shell/two-folders/test",
+        },
     }

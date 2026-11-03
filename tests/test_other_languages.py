@@ -60,6 +60,124 @@ def jacoco(tmp_path, covered=1, missed=0, package="scripts"):
 
 
 @pytest.mark.parametrize(
+    ("report_name", "untested"),
+    [
+        ("first-only", "second/second.sh"),
+        ("second-only", "first/first.sh"),
+    ],
+)
+def test_real_kcov_report_refuses_absent_changed_source(
+    tmp_path, report_name, untested
+):
+    base = "tests/fixtures/shell/two-folders"
+    fixture = (
+        Path(__file__).parent
+        / "fixtures/shell/two-folders/reports"
+        / f"{report_name}.xml"
+    )
+    report = tmp_path / "coverage.xml"
+    report.write_bytes(fixture.read_bytes())
+    first = patch(tmp_path, f"{base}/first/first.sh").read_text()
+    second = patch(tmp_path, f"{base}/second/second.sh").read_text()
+    diff = tmp_path / "both.patch"
+    diff.write_text(first + second)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        report,
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        f'["{base}/first", "{base}/second"]',
+    ) == (
+        2,
+        f"configuration error: changed source absent from coverage: {base}/{untested}\n",
+        "",
+    )
+
+
+def test_real_kcov_report_names_only_uncovered_second_script_lines(tmp_path):
+    base = "tests/fixtures/shell/two-folders"
+    fixture = Path(__file__).parent / "fixtures/shell/two-folders/reports/partial.xml"
+    report = tmp_path / "coverage.xml"
+    report.write_bytes(fixture.read_bytes())
+    first = patch(tmp_path, f"{base}/first/first.sh").read_text()
+    second = patch(tmp_path, f"{base}/second/second.sh", line=6).read_text()
+    diff = tmp_path / "both.patch"
+    diff.write_text(first + second)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        report,
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        f'["{base}/first", "{base}/second"]',
+    ) == (1, f"uncovered changed lines: {base}/second/second.sh:6\n", "")
+
+
+def test_changed_lines_rejects_removed_single_source_root(tmp_path):
+    stderr = io.StringIO()
+    with redirect_stderr(stderr), pytest.raises(SystemExit) as error:
+        main(
+            [
+                "changed-lines",
+                "--kind",
+                "shell",
+                "--report",
+                str(tmp_path / "coverage.xml"),
+                "--diff-file",
+                str(tmp_path / "change.patch"),
+                "--source-root",
+                "scripts",
+            ]
+        )
+    assert error.value.code == 2
+    assert "unrecognized arguments: --source-root scripts" in stderr.getvalue()
+
+
+@pytest.mark.parametrize("roots", ["[]", '"hooks"', '["hooks", 1]', '[""]'])
+def test_changed_lines_rejects_invalid_json_sources(tmp_path, roots):
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        patch(tmp_path, "scripts/task.sh"),
+        "--source-roots-json",
+        roots,
+    ) == (2, "configuration error: source paths must be a non-empty list\n", "")
+
+
+def test_changed_shell_line_outside_both_roots_is_named(tmp_path):
+    source = patch(tmp_path, "scripts/task.sh").read_text()
+    excluded = patch(tmp_path, "vendor/task.sh").read_text()
+    combined = tmp_path / "combined.patch"
+    combined.write_text(source + excluded)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        combined,
+        "--source-roots-json",
+        '["scripts", "hooks"]',
+    ) == (
+        0,
+        "all changed lines covered; skipped changed source outside declared paths: vendor/task.sh\n",
+        "",
+    )
+
+
+@pytest.mark.parametrize(
     ("hits", "branches", "expected"),
     [
         (1, (1, 1), (0, "all changed lines covered\n", "")),
@@ -186,7 +304,7 @@ def test_changed_lines_accepts_each_supported_source_suffix(
         .replace(filename, source)
         .replace(Path(filename).name, Path(source).name)
     )
-    options = ["--source-root", "scripts"] if kind != "javascript" else []
+    options = ["--source-roots-json", '["scripts"]'] if kind != "javascript" else []
     assert invoke(
         "changed-lines",
         "--kind",
@@ -465,8 +583,8 @@ def test_coverage_gutters_nested_jacoco_paths_are_exact(tmp_path):
         report,
         "--diff-file",
         patch(tmp_path, "scripts/lib/b.ps1"),
-        "--source-root",
-        "scripts",
+        "--source-roots-json",
+        '["scripts"]',
     ) == (1, "uncovered changed lines: scripts/lib/b.ps1:2\n", "")
     assert ET.parse(report).find(".//package").attrib["name"] == "scripts/lib"
 
@@ -486,11 +604,16 @@ def test_coverage_gutters_nested_jacoco_paths_are_exact(tmp_path):
             ("--source-roots-json", '["site/js/app.js"]'),
             "site/js/altcha.js",
         ),
-        ("shell", "scripts/task.sh", ("--source-root", "scripts"), "vendor/task.sh"),
+        (
+            "shell",
+            "scripts/task.sh",
+            ("--source-roots-json", '["scripts"]'),
+            "vendor/task.sh",
+        ),
         (
             "powershell",
             "scripts/health.ps1",
-            ("--source-root", "scripts"),
+            ("--source-roots-json", '["scripts"]'),
             "tests/Health.Tests.ps1",
         ),
     ],
@@ -578,8 +701,8 @@ def test_jacoco_prefixed_path_is_normalized_in_report(tmp_path):
         coverage,
         "--diff-file",
         patch(tmp_path, "project/src/health.ps1"),
-        "--source-root",
-        "project/src",
+        "--source-roots-json",
+        '["project/src"]',
     ) == (1, "uncovered changed lines: project/src/health.ps1:2\n", "")
     assert ET.parse(coverage).find(".//package").attrib["name"] == "project/src"
 
@@ -713,8 +836,8 @@ def test_pester_absolute_package_path_is_normalized(tmp_path):
         report,
         "--diff-file",
         patch(tmp_path, "project/src/health.ps1"),
-        "--source-root",
-        "project/src",
+        "--source-roots-json",
+        '["project/src"]',
     ) == (1, "uncovered changed lines: project/src/health.ps1:2\n", "")
     assert ET.parse(report).find(".//package").attrib["name"] == "project/src"
 
@@ -749,8 +872,8 @@ def test_pester_single_source_file_path_is_used_directly(tmp_path):
         jacoco(tmp_path, covered=0, missed=1, package="src"),
         "--diff-file",
         patch(tmp_path, "src/health.ps1"),
-        "--source-root",
-        "src/health.ps1",
+        "--source-roots-json",
+        '["src/health.ps1"]',
     ) == (1, "uncovered changed lines: src/health.ps1:2\n", "")
 
 
@@ -763,8 +886,8 @@ def test_powershell_source_root_excludes_changed_test_file(tmp_path):
         jacoco(tmp_path),
         "--diff-file",
         patch(tmp_path, "tests/Health.Tests.ps1"),
-        "--source-root",
-        "scripts",
+        "--source-roots-json",
+        '["scripts"]',
     ) == (
         0,
         "no changed PowerShell lines to check; skipped changed source outside declared paths: tests/Health.Tests.ps1\n",

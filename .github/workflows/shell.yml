@@ -11,7 +11,7 @@ on:
       caller_job:
         required: true
         type: string
-      source_path:
+      source_paths:
         required: true
         type: string
       tests_path:
@@ -42,9 +42,11 @@ jobs:
       - name: Install shared checks
         run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
       - name: Run Bats under kcov
-        run: kcov --cobertura-only --include-path="$SOURCE_PATH" .coverage-shell /usr/bin/bats "$TESTS_PATH"
+        run: |
+          include_paths=$(bash .ci-workflows/scripts/workflow-glue.sh kcov-paths)
+          kcov --cobertura-only --include-path="$include_paths" .coverage-shell /usr/bin/bats "$TESTS_PATH"
         env:
-          SOURCE_PATH: ${{ inputs.source_path }}
+          SOURCE_PATHS: ${{ inputs.source_paths }}
           TESTS_PATH: ${{ inputs.tests_path }}
       - name: Check floor ratchet
         shell: bash
@@ -62,5 +64,5 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
-          SOURCE_PATH: ${{ inputs.source_path }}
+          SOURCE_PATHS: ${{ inputs.source_paths }}
         run: bash .ci-workflows/scripts/workflow-glue.sh changed shell .coverage-shell/cov.xml

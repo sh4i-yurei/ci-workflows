@@ -1029,6 +1029,21 @@ def test_source_paths_prints_own_and_two_folder_configs(tmp_path):
     assert invoke("source-paths", "--config", config) == (0, "hooks\nscripts\n", "")
 
 
+def test_source_paths_prints_json_roots_one_per_line():
+    assert invoke(
+        "source-paths", "--roots-json", '["hooks", "skills/buildlog/scripts"]'
+    ) == (0, "hooks\nskills/buildlog/scripts\n", "")
+
+
+@pytest.mark.parametrize("roots", ["[]", '"hooks"', '["hooks", 1]', '[""]'])
+def test_source_paths_rejects_invalid_json_roots(roots):
+    assert invoke("source-paths", "--roots-json", roots) == (
+        2,
+        "",
+        "configuration error: source paths must be a non-empty list\n",
+    )
+
+
 def test_source_paths_requires_config_argument():
     stderr = io.StringIO()
     with redirect_stderr(stderr), pytest.raises(SystemExit) as error:
@@ -1054,7 +1069,7 @@ def test_source_paths_and_filter_sources_reject_same_invalid_config(
     expected = (
         2,
         "",
-        "configuration error: mutmut source_paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )
     assert invoke("source-paths", "--config", config) == expected
     monkeypatch.setattr(sys, "stdin", io.StringIO("hooks/session_start.py\n"))
@@ -1068,7 +1083,7 @@ def test_filter_sources_requires_declared_mutation_paths(tmp_path, monkeypatch):
     assert invoke("filter-sources", "--config", config) == (
         2,
         "",
-        "configuration error: mutmut source_paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )
 
 
@@ -1092,7 +1107,7 @@ def test_filter_sources_rejects_invalid_source_paths(
     assert invoke("filter-sources", "--config", config) == (
         2,
         "",
-        "configuration error: mutmut source_paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )
 
 
@@ -1138,7 +1153,7 @@ def test_filter_sources_rejects_non_string_json_root(monkeypatch):
     ) == (
         2,
         "",
-        "configuration error: mutation source paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )
 
 
@@ -1166,5 +1181,5 @@ def test_filter_rejects_invalid_json_roots(monkeypatch):
     assert invoke("filter-sources", "--roots-json", "[]", "--extension", ".js") == (
         2,
         "",
-        "configuration error: mutation source paths must be a non-empty list\n",
+        "configuration error: source paths must be a non-empty list\n",
     )

@@ -73,6 +73,20 @@ test_python() {
   "$PYTHON" -m pytest "${coverage_args[@]}" --cov-branch --cov-report=xml
 }
 
+kcov_paths() {
+  local paths_text path
+  local -a paths=()
+  paths_text=$("$PYTHON" -m ci_workflows source-paths --roots-json "$SOURCE_PATHS") || return $?
+  mapfile -t paths <<< "$paths_text"
+  for path in "${paths[@]}"; do
+    if [[ $path == *,* ]]; then
+      echo "kcov source path contains a comma: $path" >&2
+      return 2
+    fi
+  done
+  (IFS=,; printf '%s\n' "${paths[*]}")
+}
+
 floor_gate() {
   local kind=$1 report=$2
   local base
@@ -94,7 +108,7 @@ changed_gate() {
   case $kind in
     python) args+=(--source-config pyproject.toml) ;;
     javascript) args+=(--source-roots-json "$MUTATION_SOURCES") ;;
-    shell|powershell) args+=(--source-root "$SOURCE_PATH") ;;
+    shell|powershell) args+=(--source-roots-json "$SOURCE_PATHS") ;;
     *) echo "unknown language: $kind" >&2; return 2 ;;
   esac
   diff_files patch | "$PYTHON" -m ci_workflows "${args[@]}"
@@ -151,6 +165,7 @@ case $command in
   diff) diff_files "$@" ;;
   sources) sources "$@" ;;
   test-python) test_python ;;
+  kcov-paths) kcov_paths ;;
   base-workflow) base_workflow "$@" ;;
   floor) floor_gate "$@" ;;
   changed) changed_gate "$@" ;;

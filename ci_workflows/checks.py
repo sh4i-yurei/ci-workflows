@@ -160,7 +160,6 @@ def changed_lines(
     report: Path,
     patch_file: Path,
     kind: str,
-    source_root: Path | None = None,
     source_config: Path | None = None,
     source_roots_json: str | None = None,
 ) -> tuple[int, str]:
@@ -193,11 +192,6 @@ def changed_lines(
                 list(suffixes[kind]),
             )
         )
-    elif source_root is not None:
-        root_path = Path(_source_path(str(source_root)))
-        allowed = {
-            path for path in language_changes if Path(path).is_relative_to(root_path)
-        }
     if kind == "javascript":
         allowed = {path for path in allowed if not _javascript_test_path(path)}
     skipped = sorted(set(language_changes) - allowed)
@@ -555,16 +549,23 @@ def survivor_check(
     return 0, "mutation survivors accepted"
 
 
-def read_mutation_source_paths(config: Path) -> list[str]:
-    document = tomllib.loads(config.read_text())
-    roots = document.get("tool", {}).get("mutmut", {}).get("source_paths")
+def read_source_paths(config: Path | None, roots_json: str | None = None) -> list[str]:
+    if config is not None:
+        document = tomllib.loads(config.read_text())
+        roots = document.get("tool", {}).get("mutmut", {}).get("source_paths")
+    else:
+        roots = json.loads(roots_json)
     if (
         not isinstance(roots, list)
         or not roots
         or not all(isinstance(root, str) and root for root in roots)
     ):
-        raise ConfigurationError("mutmut source_paths must be a non-empty list")
+        raise ConfigurationError("source paths must be a non-empty list")
     return roots
+
+
+def read_mutation_source_paths(config: Path) -> list[str]:
+    return read_source_paths(config)
 
 
 def filter_sources(
@@ -573,16 +574,11 @@ def filter_sources(
     roots_json: str | None = None,
     extensions: list[str] | None = None,
 ) -> list[str]:
-    if config is not None:
-        roots = read_mutation_source_paths(config)
-    else:
-        roots = json.loads(roots_json)
-        if (
-            not isinstance(roots, list)
-            or not roots
-            or not all(isinstance(root, str) and root for root in roots)
-        ):
-            raise ConfigurationError("mutation source paths must be a non-empty list")
+    roots = (
+        read_mutation_source_paths(config)
+        if config is not None
+        else read_source_paths(None, roots_json)
+    )
     source_paths = [Path(root) for root in roots]
     allowed_extensions = extensions or [".py"]
     return [
@@ -600,10 +596,9 @@ def filter_sources(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ci-checks")
     commands = parser.add_subparsers(dest="command", required=True)
-    changed = commands.add_parser("changed-lines")
+    changed = commands.add_parser("changed-lines", allow_abbrev=False)
     changed.add_argument("--report", type=Path, required=True)
     changed.add_argument("--diff-file", type=Path, required=True)
-    changed.add_argument("--source-root", type=Path)
     changed.add_argument("--source-config", type=Path)
     changed.add_argument("--source-roots-json")
     changed.add_argument(
@@ -639,7 +634,9 @@ def main(argv: list[str] | None = None) -> int:
     roots.add_argument("--roots-json")
     source_filter.add_argument("--extension", action="append")
     source_paths = commands.add_parser("source-paths")
-    source_paths.add_argument("--config", type=Path, required=True)
+    source_path_input = source_paths.add_mutually_exclusive_group(required=True)
+    source_path_input.add_argument("--config", type=Path)
+    source_path_input.add_argument("--roots-json")
     alerts = commands.add_parser("alerts")
     alerts.add_argument("--test-file", action="append", type=Path, required=True)
     policy = commands.add_parser("policy")
@@ -662,7 +659,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.report,
                 args.diff_file,
                 args.kind,
-                args.source_root,
                 args.source_config,
                 args.source_roots_json,
             )
@@ -699,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(name)
             return 0
         elif args.command == "source-paths":
-            for path in read_mutation_source_paths(args.config):
+            for path in read_source_paths(args.config, args.roots_json):
                 print(path)
             return 0
         elif args.command == "alerts":

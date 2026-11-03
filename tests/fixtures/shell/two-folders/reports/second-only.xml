@@ -1,0 +1,19 @@
+<?xml version="1.0" ?>
+<!DOCTYPE coverage SYSTEM 'http://cobertura.sourceforge.net/xml/coverage-04.dtd'>
+<coverage line-rate="1.000" lines-covered="2" lines-valid="2" branch-rate="1.0" branches-covered="1.0" branches-rate="1.0" complexity="1.0" version="1.9" timestamp="1793715411">
+	<sources>
+		<source>tests/fixtures/shell/two-folders/second/second.sh/</source>
+	</sources>
+	<packages>
+		<package name="bats" line-rate="1.000" lines-covered="2" lines-valid="2" branch-rate="1.0" complexity="1.0">
+			<classes>
+				<class name="second_sh__0" filename="tests/fixtures/shell/two-folders/second/second.sh" branch-rate="1.0" complexity="1.0" line-rate="1.000">
+					<lines>
+						<line number="2" hits="1"/>
+						<line number="6" hits="1"/>
+					</lines>
+				</class>
+			</classes>
+		</package>
+	</packages>
+</coverage>
