@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+if [ "${1:-}" = "--name" ]; then
+  printf 'second-tool\n'
+else
+  printf 'tool\n'
+fi

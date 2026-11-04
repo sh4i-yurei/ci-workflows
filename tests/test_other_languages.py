@@ -2,6 +2,8 @@
 
 import io
 import json
+import shutil
+import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -112,6 +114,213 @@ def test_real_kcov_report_names_only_uncovered_second_script_lines(tmp_path):
         "--source-roots-json",
         f'["{base}/first", "{base}/second"]',
     ) == (1, f"uncovered changed lines: {base}/second/second.sh:6\n", "")
+
+
+@pytest.mark.parametrize(
+    ("report_name", "expected"),
+    [
+        ("first-only", (2, "configuration error: changed source absent from coverage")),
+        ("tool-partial", (1, "uncovered changed lines")),
+        ("tool-full", (0, "all changed lines covered")),
+    ],
+)
+def test_extensionless_shell_source_uses_real_kcov_reports(
+    tmp_path, report_name, expected
+):
+    base = "tests/fixtures/shell/two-folders"
+    source = f"{base}/second/second-tool"
+    fixture = (
+        Path(__file__).parent / f"fixtures/shell/two-folders/reports/{report_name}.xml"
+    )
+    report = tmp_path / "coverage.xml"
+    report.write_bytes(fixture.read_bytes())
+    diff = Path(__file__).parent / "fixtures/shell/two-folders/second-tool.patch"
+    message = expected[1]
+    if report_name == "first-only":
+        message += f": {source}"
+    elif report_name == "tool-partial":
+        message += f": {source}:3"
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        report,
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        f'["{base}/first", "{base}/second"]',
+    ) == (expected[0], message + "\n", "")
+
+
+def shell_repository(tmp_path, sources):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+        check=True,
+    )
+    for name, content in sources.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if content is None:
+            shutil.copyfile(shutil.which("bash"), path)
+        else:
+            path.write_text(content)
+        subprocess.run(["git", "-C", str(root), "add", "-N", name], check=True)
+    diff = tmp_path / "source.patch"
+    diff.write_bytes(
+        subprocess.run(
+            ["git", "-C", str(root), "diff", "--unified=0"],
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    return root, diff
+
+
+@pytest.mark.parametrize(
+    "shebang",
+    [
+        "#!/bin/bash",
+        "#!/usr/bin/env bash",
+        "#!/bin/sh",
+        "#!/usr/bin/env sh",
+        "#!/bin/bash -e",
+        "#!/usr/bin/env -S bash -e",
+        "#!/usr/bin/env MODE=fast bash",
+        "#!bash",
+    ],
+)
+def test_extensionless_shell_interpreters_are_counted(tmp_path, monkeypatch, shebang):
+    root, diff = shell_repository(
+        tmp_path, {"scripts/runner": shebang + "\nprintf 'x\\n'\n"}
+    )
+    monkeypatch.chdir(root)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        '["scripts"]',
+    ) == (
+        2,
+        "configuration error: changed source absent from coverage: scripts/runner\n",
+        "",
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "first_line"),
+    [
+        ("runner", "#!/usr/bin/env python3"),
+        ("runner", "#!/usr/bin/env zsh"),
+        ("runner", "printf 'x\\n'"),
+        ("runner", "#!"),
+        ("runner", "#!/usr/bin/env -S"),
+        ("Makefile", "all:"),
+        ("helper.py", "#!/usr/bin/env bash"),
+    ],
+)
+def test_other_interpreters_and_extensions_are_not_shell(
+    tmp_path, monkeypatch, name, first_line
+):
+    root, diff = shell_repository(
+        tmp_path, {f"scripts/{name}": first_line + "\nprintf 'x\\n'\n"}
+    )
+    monkeypatch.chdir(root)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        '["scripts"]',
+    ) == (0, "no changed shell lines to check\n", "")
+
+
+def test_extensionless_shell_outside_declared_source_is_named(tmp_path, monkeypatch):
+    root, diff = shell_repository(
+        tmp_path,
+        {
+            "scripts/task.sh": "#!/bin/sh\nprintf 'x\\n'\n",
+            "vendor/runner": "#!/usr/bin/env bash\nprintf 'x\\n'\n",
+        },
+    )
+    monkeypatch.chdir(root)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        '["scripts"]',
+    ) == (
+        0,
+        "all changed lines covered; skipped changed source outside declared paths: vendor/runner\n",
+        "",
+    )
+
+
+def test_extensionless_binary_has_no_shell_lines(tmp_path, monkeypatch):
+    root, diff = shell_repository(tmp_path, {"scripts/runner": None})
+    monkeypatch.chdir(root)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        '["scripts"]',
+    ) == (0, "no changed shell lines to check\n", "")
+
+
+def test_extensionless_source_missing_from_worktree_has_no_shell_lines(
+    tmp_path, monkeypatch
+):
+    root, diff = shell_repository(
+        tmp_path, {"scripts/runner": "#!/bin/bash\nprintf 'x\\n'\n"}
+    )
+    (root / "scripts/runner").unlink()
+    monkeypatch.chdir(root)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "shell",
+        "--report",
+        cobertura(tmp_path),
+        "--diff-file",
+        diff,
+        "--source-roots-json",
+        '["scripts"]',
+    ) == (0, "no changed shell lines to check\n", "")
 
 
 def test_changed_lines_rejects_removed_single_source_root(tmp_path):
