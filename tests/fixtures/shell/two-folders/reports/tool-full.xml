@@ -1,0 +1,31 @@
+<?xml version="1.0" ?>
+<!DOCTYPE coverage SYSTEM 'http://cobertura.sourceforge.net/xml/coverage-04.dtd'>
+<coverage line-rate="1.000" lines-covered="6" lines-valid="6" branch-rate="1.0" branches-covered="1.0" branches-rate="1.0" complexity="1.0" version="1.9" timestamp="1793770879">
+	<sources>
+		<source>tests/fixtures/shell/two-folders/</source>
+	</sources>
+	<packages>
+		<package name="bats" line-rate="1.000" lines-covered="6" lines-valid="6" branch-rate="1.0" complexity="1.0">
+			<classes>
+				<class name="second_tool__0" filename="second/second-tool" branch-rate="1.0" complexity="1.0" line-rate="1.000">
+					<lines>
+						<line number="2" hits="2"/>
+						<line number="3" hits="1"/>
+						<line number="5" hits="1"/>
+					</lines>
+				</class>
+				<class name="second_sh__1" filename="second/second.sh" branch-rate="1.0" complexity="1.0" line-rate="1.000">
+					<lines>
+						<line number="2" hits="1"/>
+						<line number="6" hits="1"/>
+					</lines>
+				</class>
+				<class name="first_sh__2" filename="first/first.sh" branch-rate="1.0" complexity="1.0" line-rate="1.000">
+					<lines>
+						<line number="2" hits="1"/>
+					</lines>
+				</class>
+			</classes>
+		</package>
+	</packages>
+</coverage>

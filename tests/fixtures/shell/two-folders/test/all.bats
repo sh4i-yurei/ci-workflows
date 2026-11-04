@@ -12,4 +12,8 @@ setup() {
   [ "$output" = "second" ]
   run second_extra
   [ "$output" = "extra" ]
+  run "$BATS_TEST_DIRNAME/../second/second-tool"
+  [ "$output" = "tool" ]
+  run "$BATS_TEST_DIRNAME/../second/second-tool" --name
+  [ "$output" = "second-tool" ]
 }

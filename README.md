@@ -24,7 +24,7 @@ Every language workflow also requires `caller_job`, the job ID in the caller wor
 
 The JavaScript workflow requires `install_command`, `caller_workflow`, and `mutation_sources`, a JSON list of source directories such as `["src"]`. The caller installs StrykerJS and configures its command runner to execute `node --test`. The workflow writes Node's LCov report and Stryker's default JSON report at `reports/mutation/mutation.json`.
 
-The shell workflow requires `caller_workflow`, `source_paths` (a JSON list of shell source folders, such as `["hooks", "skills/buildlog/scripts"]`), and `tests_path` (a Bats test file or directory). kcov measures each listed folder and writes Cobertura XML to `.coverage-shell/cov.xml`.
+The shell workflow requires `caller_workflow`, `source_paths` (a JSON list of shell source folders, such as `["hooks", "skills/buildlog/scripts"]`), and `tests_path` (a Bats test file or directory). kcov measures each listed folder and writes Cobertura XML to `.coverage-shell/cov.xml`. The changed-lines step treats a file ending in `.sh` or `.bash`, or an extensionless file whose `#!` line names `bash` or `sh`, as shell source.
 
 The PowerShell workflow requires `caller_workflow`, `source_paths` (a JSON list of source folders, such as `["scripts/admin", "scripts/monitoring"]`), and `tests_path` (a Pester test file or directory). Its Windows job runs the tests under Windows PowerShell 5.1 with Pester 5.7.1, measures every listed folder, and uploads `coverage-jacoco.xml`. The dependent Linux job downloads that report and runs the floor and changed-line gates there, where the shared shell and Python checks are tested. Pester writes repository-relative JaCoCo paths with forward slashes, so the gates can read the Windows report on Linux.
 

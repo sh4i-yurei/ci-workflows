@@ -54,13 +54,25 @@
 - mutant: ci_workflows.checks.x__repository_root__mutmut_3
   reason: When no Git root exists, passing cwd=None to subprocess.run has the same
     effect as omitting cwd; both use the current directory.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_125
+- mutant: ci_workflows.checks.x__shell_source__mutmut_1
+  reason: The interpreter names bash and sh are ASCII, so the default text encoding reads them identically.
+- mutant: ci_workflows.checks.x__shell_source__mutmut_3
+  reason: The interpreter names bash and sh are ASCII, so omitting the encoding reads them identically.
+- mutant: ci_workflows.checks.x__shell_source__mutmut_7
+  reason: Python treats UTF-8 and utf-8 as the same text encoding.
+- mutant: ci_workflows.checks.x__shell_source__mutmut_28
+  reason: An env shebang with no later command is not shell whether the fallback is empty or None.
+- mutant: ci_workflows.checks.x__shell_source__mutmut_39
+  reason: An env shebang with no later command is not shell whether the fallback is empty or XXXX.
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_78
+  reason: Other language paths are already filtered by their suffix before the source-root filter sees them.
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_140
   reason: The temporary LCOV filename changes, but its contents and the public verdict
     remain identical.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_126
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_141
   reason: The temporary LCOV filename changes case, but its contents and the public
     verdict remain identical.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_167
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_182
   reason: Passing the current directory as cwd to subprocess.run has the same effect
     as omitting cwd.
 - mutant: ci_workflows.checks.x_floor_check__mutmut_18

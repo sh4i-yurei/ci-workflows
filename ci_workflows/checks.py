@@ -72,6 +72,32 @@ def _repository_root() -> Path:
     )
 
 
+def _shell_source(path: str) -> bool:
+    try:
+        with (_repository_root() / path).open(
+            encoding="utf-8", errors="replace"
+        ) as source:
+            first_line = source.readline()
+    except OSError:
+        return False
+    if not first_line.startswith("#!"):
+        return False
+    words = first_line[2:].split()
+    if not words:
+        return False
+    interpreter = Path(words[0]).name
+    if interpreter == "env":
+        interpreter = next(
+            (
+                Path(word).name
+                for word in words[1:]
+                if not word.startswith("-") and "=" not in word
+            ),
+            "",
+        )
+    return interpreter in {"bash", "sh"}
+
+
 def _javascript_test_path(value: str) -> bool:
     path = Path(value)
     return (
@@ -180,7 +206,11 @@ def changed_lines(
     language_changes = {
         path: lines
         for path, lines in changed.items()
-        if path.endswith(suffixes[kind]) and lines
+        if (
+            path.endswith(suffixes[kind])
+            or (kind == "shell" and not Path(path).suffix and _shell_source(path))
+        )
+        and lines
     }
     allowed = set(language_changes)
     if source_config is not None or source_roots_json is not None:
@@ -189,7 +219,7 @@ def changed_lines(
                 source_config,
                 list(language_changes),
                 source_roots_json,
-                list(suffixes[kind]),
+                [*suffixes[kind], ""] if kind == "shell" else list(suffixes[kind]),
             )
         )
     if kind == "javascript":

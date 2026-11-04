@@ -1,0 +1,12 @@
+diff --git a/tests/fixtures/shell/two-folders/second/second-tool b/tests/fixtures/shell/two-folders/second/second-tool
+new file mode 100755
+index 0000000..6d8bfaa
+--- /dev/null
++++ b/tests/fixtures/shell/two-folders/second/second-tool
+@@ -0,0 +1,6 @@
++#!/usr/bin/env bash
++if [ "${1:-}" = "--name" ]; then
++  printf 'second-tool\n'
++else
++  printf 'tool\n'
++fi
