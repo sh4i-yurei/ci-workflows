@@ -25,7 +25,7 @@ def workflow(name):
 
 def test_own_ci_calls_shared_python_checks():
     ci = workflow("ci.yml")
-    assert ci["on"] == {"push": {}, "pull_request": {}}
+    assert ci["on"] == {"push": {}}
     assert ci["permissions"] == {"contents": "read"}
     assert (
         "actionlint@v1.7.12 .github/workflows/*.yml"
@@ -103,6 +103,30 @@ def test_readme_documents_workflow_contract():
     assert "Shell and PowerShell have no mutation tool" in readme
     assert "coverage_package" not in readme
     assert "source_paths" in readme
+    assert (
+        "On a push to the default branch, the mutation step prints "
+        '"mutation skipped on a push to the default branch <name>" and mutates nothing, '
+        "because the merged branch's own push already mutated it."
+    ) in readme
+    assert (
+        "Trigger the caller workflow on push only. A push run's checks on a pull "
+        "request's head commit count toward the pull request's required checks, so a "
+        "pull_request trigger would run the same checks a second time."
+    ) in readme
+
+
+def test_architecture_documents_mutation_skip_and_push_only_ci():
+    architecture = (ROOT / "ARCHITECTURE.md").read_text()
+    rows = {
+        line.split(" | ", 1)[0]: line
+        for line in architecture.splitlines()
+        if line.startswith("| `")
+    }
+    assert "runs on push only" in rows["| `.github/workflows/ci.yml`"]
+    assert (
+        "skipping both mutation commands on a push to the default branch"
+        in rows["| `scripts/workflow-glue.sh`"]
+    )
 
 
 @pytest.mark.parametrize(

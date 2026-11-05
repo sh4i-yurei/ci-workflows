@@ -17,6 +17,7 @@ These public reusable GitHub Actions workflows run the checks in the testing sta
 ## Inputs
 
 On a push to a branch other than the default branch, the changed-line, floor and mutation steps compare with the merge base of that branch and the default branch.
+On a push to the default branch, the mutation step prints "mutation skipped on a push to the default branch <name>" and mutates nothing, because the merged branch's own push already mutated it.
 
 Each language workflow accepts the caller's required numeric `coverage_floor` from 0 to 100. The Python workflow also requires `install_command` (how to install the caller's code and tests) and `caller_workflow` (the path to the caller's workflow for the floor comparison). It reads `[tool.mutmut].source_paths` from the caller's `pyproject.toml` to measure coverage over every declared path and to scope its changed-line and mutation steps. A pull request must keep its floor at or above the base branch's value. The Python, JavaScript, shell, and PowerShell workflows require coverage reports produced by their test steps. The Molecule workflow runs the caller's `molecule/` scenarios. The Prometheus and Tailscale workflows take paths to caller rule tests and policy files.
 
@@ -37,6 +38,8 @@ The Tailscale workflow requires `policy_file` and the caller's `TS_OAUTH_ID`, `T
 The caller must grant `id-token: write` in its workflow permissions so GitHub can issue the identity token.
 
 ## Pinning a caller
+
+Trigger the caller workflow on push only. A push run's checks on a pull request's head commit count toward the pull request's required checks, so a pull_request trigger would run the same checks a second time.
 
 Call a workflow with a full commit SHA, then update the pin deliberately after reviewing changes:
 

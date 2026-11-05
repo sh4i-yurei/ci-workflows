@@ -161,6 +161,11 @@ mutate_javascript() {
 
 command=${1:?command required}
 shift
+if [[ $command == mutate-python || $command == mutate-javascript ]] &&
+   [[ -n ${PUSHED_REF:-} && -n ${DEFAULT_BRANCH:-} && $PUSHED_REF == "$DEFAULT_BRANCH" ]]; then
+  printf 'mutation skipped on a push to the default branch %s\n' "$DEFAULT_BRANCH"
+  exit 0
+fi
 case $command in
   diff) diff_files "$@" ;;
   sources) sources "$@" ;;

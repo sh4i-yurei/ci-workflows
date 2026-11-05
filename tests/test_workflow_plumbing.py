@@ -481,7 +481,8 @@ def test_floor_and_changed_gates_pass_base_and_exact_diff(commits, tmp_path):
     assert "--- a/src/app.py\n+++ b/src/app.py\n" in diff_log.read_text()
 
 
-def test_mutation_commands_pass_exact_selectors_and_scope(commits, tmp_path):
+@pytest.fixture
+def mutation_stubs(commits, tmp_path):
     repo, base = commits
     (repo / "src/other file.js").write_text("export const y = 2;\n")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
@@ -520,24 +521,101 @@ esac""",
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "MUTATION_SOURCES": '["src"]',
     }
+    return repo, base, env, log
+
+
+PYTHON_MUTATION_CALLS = (
+    "mutmut run pkg.f.x_one__mutmut_* pkg.f.x_two__mutmut_*\n"
+    "python -m ci_workflows survivors --format mutmut --results mutants "
+    "--survivors-file .mutation-survivors.yml --selected-function pkg.f.x_one "
+    "--selected-function pkg.f.x_two\n"
+)
+JAVASCRIPT_MUTATION_CALLS = (
+    "npx argc=7 --no-install stryker run --mutate src/app.js,src/other file.js "
+    "--reporters json,clear-text\n"
+    "python -m ci_workflows survivors --format stryker --results "
+    "reports/mutation/mutation.json --survivors-file .mutation-survivors.yml "
+    "--selected-file src/app.js --selected-file src/other file.js\n"
+)
+
+
+def test_mutation_commands_pass_exact_selectors_and_scope(mutation_stubs):
+    repo, base, env, log = mutation_stubs
     py = run(repo, "mutate-python", base_sha=base, extra_env=env)
     assert (py.returncode, py.stdout, py.stderr) == (0, "", "")
-    assert log.read_text() == (
-        "mutmut run pkg.f.x_one__mutmut_* pkg.f.x_two__mutmut_*\n"
-        "python -m ci_workflows survivors --format mutmut --results mutants "
-        "--survivors-file .mutation-survivors.yml --selected-function pkg.f.x_one "
-        "--selected-function pkg.f.x_two\n"
-    )
+    assert log.read_text() == PYTHON_MUTATION_CALLS
     log.write_text("")
     js = run(repo, "mutate-javascript", base_sha=base, extra_env=env)
     assert (js.returncode, js.stdout, js.stderr) == (0, "", "")
-    assert log.read_text() == (
-        "npx argc=7 --no-install stryker run --mutate src/app.js,src/other file.js "
-        "--reporters json,clear-text\n"
-        "python -m ci_workflows survivors --format stryker --results "
-        "reports/mutation/mutation.json --survivors-file .mutation-survivors.yml "
-        "--selected-file src/app.js --selected-file src/other file.js\n"
+    assert log.read_text() == JAVASCRIPT_MUTATION_CALLS
+
+
+@pytest.mark.parametrize("command", ["mutate-python", "mutate-javascript"])
+@pytest.mark.parametrize("branch", ["main", "trunk"])
+def test_mutation_skips_default_branch_push(mutation_stubs, command, branch):
+    repo, _, env, log = mutation_stubs
+    result = run(
+        repo,
+        command,
+        extra_env={**env, "DEFAULT_BRANCH": branch, "PUSHED_REF": branch},
     )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        f"mutation skipped on a push to the default branch {branch}\n",
+        "",
+    )
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("command", ["mutate-python", "mutate-javascript"])
+def test_mutation_feature_push_runs_as_before(mutation_stubs, command):
+    repo, base, env, log = mutation_stubs
+    feature_branch(repo, base)
+    result = run(
+        repo,
+        command,
+        extra_env={**env, "DEFAULT_BRANCH": "main", "PUSHED_REF": "feature"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "",
+        f"base {base} is the merge base of HEAD and origin/main\n"
+        * (2 if command == "mutate-python" else 1),
+    )
+    assert log.read_text() == (
+        PYTHON_MUTATION_CALLS
+        if command == "mutate-python"
+        else JAVASCRIPT_MUTATION_CALLS
+    )
+
+
+@pytest.mark.parametrize("command", ["mutate-python", "mutate-javascript"])
+def test_mutation_pull_request_runs_as_before(mutation_stubs, command):
+    repo, base, env, log = mutation_stubs
+    result = run(
+        repo,
+        command,
+        base_sha=base,
+        extra_env={**env, "DEFAULT_BRANCH": "main", "PUSHED_REF": ""},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert log.read_text() == (
+        PYTHON_MUTATION_CALLS
+        if command == "mutate-python"
+        else JAVASCRIPT_MUTATION_CALLS
+    )
+
+
+def test_mutation_does_not_skip_without_default_branch(mutation_stubs):
+    repo, base, env, log = mutation_stubs
+    result = run(
+        repo,
+        "mutate-python",
+        base_sha=base,
+        extra_env={**env, "DEFAULT_BRANCH": "", "PUSHED_REF": "main"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert log.read_text() == PYTHON_MUTATION_CALLS
 
 
 def test_ci_runs_pinned_actionlint_and_shared_dependencies_are_exact():
