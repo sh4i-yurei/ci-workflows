@@ -18,7 +18,7 @@ def test_base_sha_steps_pass_branch_context_only_to_glue():
     base = "${{ github.event.pull_request.base.sha || github.event.before }}"
     branch = "${{ github.event.repository.default_branch }}"
     pushed = "${{ github.event_name == 'push' && github.ref_name || '' }}"
-    counts = {"python.yml": 3, "javascript.yml": 3, "shell.yml": 2, "powershell.yml": 2}
+    counts = {"python.yml": 2, "javascript.yml": 2, "shell.yml": 2, "powershell.yml": 2}
     for name, count in counts.items():
         steps = [
             step for job in workflow(name)["jobs"].values() for step in job["steps"]
@@ -38,7 +38,7 @@ def test_base_sha_steps_pass_branch_context_only_to_glue():
         ] == [step["name"] for step in base_steps]
 
 
-def test_javascript_workflow_runs_branch_coverage_and_changed_mutations():
+def test_javascript_workflow_runs_branch_coverage_and_changed_lines():
     document = workflow("javascript.yml")
     assert document["on"] == {
         "workflow_call": {
@@ -53,7 +53,7 @@ def test_javascript_workflow_runs_branch_coverage_and_changed_mutations():
     }
     assert document["permissions"] == {"contents": "read"}
     steps = document["jobs"]["checks"]["steps"]
-    assert {step["name"] for step in steps} == {
+    assert [step["name"] for step in steps] == [
         "Check out caller",
         "Check out pinned shared checks",
         "Set up Node",
@@ -63,8 +63,12 @@ def test_javascript_workflow_runs_branch_coverage_and_changed_mutations():
         "Run Node tests with branch coverage",
         "Check floor ratchet",
         "Check changed lines",
-        "Mutate changed JavaScript",
-    }
+    ]
+    assert all(
+        "mutate-javascript" not in step.get("run", "")
+        and "stryker" not in step.get("run", "")
+        for step in steps
+    )
     coverage = next(
         step for step in steps if step["name"] == "Run Node tests with branch coverage"
     )

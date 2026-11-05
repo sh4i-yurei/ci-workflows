@@ -551,20 +551,20 @@ def test_mutation_commands_pass_exact_selectors_and_scope(mutation_stubs):
 
 
 @pytest.mark.parametrize("command", ["mutate-python", "mutate-javascript"])
-@pytest.mark.parametrize("branch", ["main", "trunk"])
-def test_mutation_skips_default_branch_push(mutation_stubs, command, branch):
-    repo, _, env, log = mutation_stubs
+def test_mutation_default_branch_push_runs_locally(mutation_stubs, command):
+    repo, base, env, log = mutation_stubs
     result = run(
         repo,
         command,
-        extra_env={**env, "DEFAULT_BRANCH": branch, "PUSHED_REF": branch},
+        base_sha=base,
+        extra_env={**env, "DEFAULT_BRANCH": "main", "PUSHED_REF": "main"},
     )
-    assert (result.returncode, result.stdout, result.stderr) == (
-        0,
-        f"mutation skipped on a push to the default branch {branch}\n",
-        "",
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert log.read_text() == (
+        PYTHON_MUTATION_CALLS
+        if command == "mutate-python"
+        else JAVASCRIPT_MUTATION_CALLS
     )
-    assert not log.exists()
 
 
 @pytest.mark.parametrize("command", ["mutate-python", "mutate-javascript"])
@@ -632,10 +632,10 @@ def test_ci_runs_pinned_actionlint_and_shared_dependencies_are_exact():
     assert "diff-cover==" in pyproject and "unidiff==" in pyproject
 
 
-def test_readme_names_molecule_podman_and_python_mutmut_contract():
+def test_readme_names_molecule_podman_and_local_mutmut_contract():
     readme = (ROOT / "README.md").read_text()
     assert "PODMAN_EXECUTABLE" in readme
-    assert "mutmut" in readme and "Python workflow installs" in readme
+    assert "mutmut" in readme and "local mutation needs" in readme
 
 
 def test_tailnet_readme_names_caller_identity_permission():
