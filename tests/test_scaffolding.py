@@ -35,7 +35,7 @@ def test_own_ci_calls_shared_python_checks():
         "uses": "./.github/workflows/python.yml",
         "with": {
             "coverage_floor": "100",
-            "install_command": "python -m pip install -e '.[test]'",
+            "install_command": "python -m pip install -e '.[test,mutation]'",
             "caller_workflow": ".github/workflows/ci.yml",
             "caller_job": "checks",
         },
@@ -67,7 +67,7 @@ def test_python_workflow_is_reusable_and_runs_pytest_with_branch_coverage():
     )
     assert "env" not in coverage_step
     steps = python["jobs"]["checks"]["steps"]
-    assert {step["name"] for step in steps} == {
+    assert [step["name"] for step in steps] == [
         "Check out caller",
         "Check out pinned shared checks",
         "Set up Python",
@@ -76,8 +76,12 @@ def test_python_workflow_is_reusable_and_runs_pytest_with_branch_coverage():
         "Run tests with branch coverage",
         "Check floor ratchet",
         "Check changed lines",
-        "Mutate changed functions",
-    }
+    ]
+    assert all(
+        "mutate-python" not in step.get("run", "")
+        and "mutmut" not in step.get("run", "")
+        for step in steps
+    )
     shared = next(
         step for step in steps if step["name"] == "Check out pinned shared checks"
     )
@@ -104,10 +108,25 @@ def test_readme_documents_workflow_contract():
     assert "coverage_package" not in readme
     assert "source_paths" in readme
     assert (
-        "On a push to the default branch, the mutation step prints "
-        '"mutation skipped on a push to the default branch <name>" and mutates nothing, '
-        "because the merged branch's own push already mutated it."
+        "On a push to a branch other than the default branch, the changed-line and floor steps "
+        "compare with the merge base of that branch and the default branch."
     ) in readme
+    assert "mutation skipped on a push to the default branch" not in readme
+    assert (
+        "| `python.yml` | pytest branch coverage, changed lines, and floor |" in readme
+    )
+    assert (
+        "| `javascript.yml` | Node test runner branch coverage, changed lines, and floor |"
+        in readme
+    )
+    assert "The Python and JavaScript workflows do not mutate." in readme
+    assert "scripts/workflow-glue.sh mutate-python" in readme
+    assert "scripts/workflow-glue.sh mutate-javascript" in readme
+    assert "same selection and survivors gate" in readme
+    assert (
+        "local mutation needs the shared checks' `mutation` extra, which pins mutmut 3.8.0"
+        in readme
+    )
     assert (
         "Trigger the caller workflow on push only. A push run's checks on a pull "
         "request's head commit count toward the pull request's required checks, so a "
@@ -115,7 +134,7 @@ def test_readme_documents_workflow_contract():
     ) in readme
 
 
-def test_architecture_documents_mutation_skip_and_push_only_ci():
+def test_architecture_documents_local_mutation_and_push_only_ci():
     architecture = (ROOT / "ARCHITECTURE.md").read_text()
     rows = {
         line.split(" | ", 1)[0]: line
@@ -123,10 +142,10 @@ def test_architecture_documents_mutation_skip_and_push_only_ci():
         if line.startswith("| `")
     }
     assert "runs on push only" in rows["| `.github/workflows/ci.yml`"]
-    assert (
-        "skipping both mutation commands on a push to the default branch"
-        in rows["| `scripts/workflow-glue.sh`"]
-    )
+    assert "mutation commands are run locally" in rows["| `scripts/workflow-glue.sh`"]
+    assert "skipping both mutation commands" not in rows["| `scripts/workflow-glue.sh`"]
+    assert "CI does not mutate" in architecture
+    assert "CI always runs mutation fresh" not in architecture
 
 
 @pytest.mark.parametrize(
@@ -195,13 +214,8 @@ def test_python_workflow_reports_real_cli_failures(
             "    return '3.9.0' if name == 'mutmut' else original_version(name)\n"
             "importlib.metadata.version = mismatched_version\n"
         )
-    mutation_step = next(
-        step["run"]
-        for step in workflow("python.yml")["jobs"]["checks"]["steps"]
-        if step["name"] == "Mutate changed functions"
-    )
     result = subprocess.run(
-        ["bash", "-eo", "pipefail", "-c", mutation_step],
+        ["bash", ".ci-workflows/scripts/workflow-glue.sh", "mutate-python"],
         cwd=repo,
         env={
             **os.environ,
@@ -230,19 +244,15 @@ def test_python_workflow_installs_verified_mutmut_version():
     )
     assert install == (
         "python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt "
-        "-e '.ci-workflows[mutation]'"
+        "-e .ci-workflows"
     )
 
 
 def test_local_mutation_command_uses_ci_selector_and_gate():
     instructions = (ROOT / "AGENTS.md").read_text()
-    workflow_step = next(
-        step["run"]
-        for step in workflow("python.yml")["jobs"]["checks"]["steps"]
-        if step["name"] == "Mutate changed functions"
-    )
-    assert workflow_step == "bash .ci-workflows/scripts/workflow-glue.sh mutate-python"
     assert (
         "BASE_SHA=$(git merge-base origin/main HEAD) "
         "bash scripts/workflow-glue.sh mutate-python"
     ) in instructions
+    assert "only mutation run" in instructions
+    assert "CI does not mutate" in instructions
