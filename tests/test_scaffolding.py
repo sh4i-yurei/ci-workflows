@@ -35,7 +35,7 @@ def test_own_ci_calls_shared_python_checks():
         "uses": "./.github/workflows/python.yml",
         "with": {
             "coverage_floor": "100",
-            "install_command": "python -m pip install -e '.[test]'",
+            "install_command": "python -m pip install -e '.[test,mutation]'",
             "caller_workflow": ".github/workflows/ci.yml",
             "caller_job": "checks",
         },
