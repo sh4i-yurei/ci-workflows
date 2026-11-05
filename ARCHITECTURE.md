@@ -27,8 +27,8 @@ caller repository
 | Piece | Owns | Must not |
 |---|---|---|
 | `.github/workflows/<kind>.yml` | One reusable workflow per kind: `python`, `javascript`, `shell`, `powershell`, `molecule`, `prometheus`, `tailscale`. Each installs pinned tools, runs the caller's tests, and calls the CLI. | Decide a verdict in shell; every pass or fail comes from the CLI |
-| `.github/workflows/ci.yml` | This repository's own CI: actionlint, and the Python workflow run on this package. | Test anything but this repository |
-| `scripts/workflow-glue.sh` | The shell steps the workflows share: resolving the base commit, producing diffs, filtering to the caller's declared source paths, and running Python tests with coverage over those paths through `test-python`. It is the only place this logic lives. | Judge results; it only prepares inputs |
+| `.github/workflows/ci.yml` | This repository's own CI runs on push only: actionlint, and the Python workflow run on this package. | Test anything but this repository |
+| `scripts/workflow-glue.sh` | The shell steps the workflows share: resolving the base commit, producing diffs, filtering to the caller's declared source paths, running Python tests with coverage over those paths through `test-python`, and skipping both mutation commands on a push to the default branch. It is the only place this logic lives. | Judge results; it only prepares inputs |
 | `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`. | Grow another kind of check; a new kind gets its own module, as `rules.py` and `tailnet.py` did |
 | `ci_workflows/rules.py` | The alert-rule check: every alert has a firing case and a quiet case in the caller's promtool tests. | Run promtool's logic itself; promtool runs the tests |
 | `ci_workflows/tailnet.py` | The tailnet policy check: mutates each grant and legacy ACL entry and asks Tailscale's validate endpoint to run the policy's tests on each copy. | Evaluate policy rules itself, or reach any Tailscale endpoint but validate |
