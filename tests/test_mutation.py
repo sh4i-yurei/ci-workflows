@@ -70,6 +70,61 @@ def names_from(result):
     return [name for shard in json.loads(result.stdout)["shards"] for name in shard]
 
 
+@pytest.mark.parametrize(
+    "arguments, missing",
+    [
+        (["mutation-plan", "--selected-function", "x"], "--source"),
+        (["mutation-plan", "--source", "a.py"], "--selected-function"),
+        (["mutation-merge", "--shard", "s"], "--into"),
+        (["mutation-merge", "--into", "t"], "--shard"),
+    ],
+)
+def test_mutation_commands_require_arguments(arguments, missing, capsys):
+    with pytest.raises(SystemExit) as error:
+        main(arguments)
+    assert error.value.code == 2
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        f"ci-checks {arguments[0]}: error: the following arguments are required: {missing}"
+    )
+
+
+@pytest.mark.parametrize(
+    "lines, extra, expected_sizes",
+    [
+        (67, (), [101, 100]),
+        (3, ("--per-shard", "2"), [2, 2, 2, 2, 1]),
+    ],
+)
+def test_plan_large_and_uneven_shards(
+    tmp_path, monkeypatch, lines, extra, expected_sizes
+):
+    source = "def big(v):\n" + "    v = v + 1\n" * lines + "    return v\n"
+    path = tmp_path / "pkg/big.py"
+    path.parent.mkdir()
+    path.write_text(source)
+    (tmp_path / "pyproject.toml").write_text('[tool.mutmut]\nsource_paths = ["pkg"]\n')
+    monkeypatch.chdir(tmp_path)
+    expected = [
+        get_mutant_name(Path("pkg/big.py"), name)
+        for name in mutate_file_contents("pkg/big.py", source).mutant_names
+        if name.startswith("x_big__mutmut_")
+    ]
+    assert len(expected) == lines * 3
+    result = invoke(
+        "mutation-plan",
+        "--source",
+        "pkg/big.py",
+        "--selected-function",
+        "pkg.big.x_big",
+        *extra,
+    )
+    assert (result.returncode, result.stderr) == (0, "")
+    data = json.loads(result.stdout)
+    assert data["mutants"] == len(expected)
+    assert [len(shard) for shard in data["shards"]] == expected_sizes
+    assert names_from(result) == expected
+
+
 def test_plan_names_and_balanced_shards(tmp_path, monkeypatch):
     fixture_project(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -242,6 +297,53 @@ def test_merge_results_and_hidden_files(tmp_path):
     assert not (target / ".cache").exists()
 
 
+def test_merge_preserves_mutants_without_results(tmp_path):
+    first, second, target = (tmp_path / name for name in ("one", "two", "merged"))
+    write_meta(
+        first / "pkg/f.py.meta",
+        {"pkg.f.x__mutmut_1": 1, "pkg.f.x__mutmut_2": None},
+    )
+    write_meta(
+        second / "pkg/f.py.meta",
+        {"pkg.f.x__mutmut_1": None, "pkg.f.x__mutmut_2": None},
+    )
+    result = invoke(
+        "mutation-merge", "--into", target, "--shard", first, "--shard", second
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "merged 2 shards: 1 mutants with results\n",
+        "",
+    )
+    assert json.loads((target / "pkg/f.py.meta").read_text()) == {
+        "exit_code_by_key": {"pkg.f.x__mutmut_1": 1, "pkg.f.x__mutmut_2": None}
+    }
+
+
+def test_merge_two_result_files_per_shard(tmp_path):
+    first, second, target = (tmp_path / name for name in ("one", "two", "merged"))
+    for shard, status in ((first, 1), (second, None)):
+        write_meta(shard / "pkg/f.py.meta", {"pkg.f.x__mutmut_1": status})
+        write_meta(shard / "pkg/g.py.meta", {"pkg.g.y__mutmut_1": status})
+    result = invoke(
+        "mutation-merge", "--into", target, "--shard", first, "--shard", second
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "merged 2 shards: 2 mutants with results\n",
+        "",
+    )
+    assert sorted(
+        path.relative_to(target).as_posix() for path in target.rglob("*.meta")
+    ) == ["pkg/f.py.meta", "pkg/g.py.meta"]
+    assert json.loads((target / "pkg/f.py.meta").read_text()) == {
+        "exit_code_by_key": {"pkg.f.x__mutmut_1": 1}
+    }
+    assert json.loads((target / "pkg/g.py.meta").read_text()) == {
+        "exit_code_by_key": {"pkg.g.y__mutmut_1": 1}
+    }
+
+
 @pytest.mark.parametrize(
     "kind, expected",
     [
@@ -360,6 +462,32 @@ def test_survivors_deleted_function_is_stale(tmp_path, monkeypatch):
     )
 
 
+def test_survivors_non_python_source_is_stale(tmp_path, monkeypatch):
+    result = survivors_case(
+        tmp_path,
+        monkeypatch,
+        ["pkg/f.py", "pkg/g.txt"],
+        ["pkg/f.py", "pkg/g.txt"],
+        "pkg.g.y__mutmut_1",
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        1,
+        "stale mutant: pkg.g.y__mutmut_1\n",
+        "",
+    )
+
+
+def test_survivors_name_without_mutmut_suffix_is_stale(tmp_path, monkeypatch):
+    result = survivors_case(
+        tmp_path, monkeypatch, ["pkg"], ["pkg/f.py", "pkg/g.py"], "pkg.g.y"
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        1,
+        "stale mutant: pkg.g.y\n",
+        "",
+    )
+
+
 @pytest.mark.parametrize(
     "roots, files, extra",
     [
@@ -408,6 +536,20 @@ def test_survivors_source_config_checks_version_first(tmp_path, monkeypatch):
         tmp_path / "none",
         "--source-config",
         tmp_path / "none",
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        2,
+        "configuration error: mutmut 3.8.0 is required for the survivors source scope\n",
+        "",
+    )
+
+
+def test_survivors_source_config_checks_version_with_existing_sources(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "3.9.0")
+    result = survivors_case(
+        tmp_path, monkeypatch, ["pkg"], ["pkg/f.py", "pkg/g.py"], "pkg.g.y__mutmut_1"
     )
     assert (result.returncode, result.stdout, result.stderr) == (
         2,
