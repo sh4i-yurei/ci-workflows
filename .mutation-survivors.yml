@@ -83,18 +83,51 @@
     passing {} both reach the same missing-caller-job configuration error.
 - mutant: ci_workflows.checks.x_main__mutmut_15
   reason: argparse treats allow_abbrev=None and allow_abbrev=False identically.
-- mutant: ci_workflows.checks.x_main__mutmut_419
-  reason: When TS_ACCESS_TOKEN is absent, the omitted get default and the empty string
-    are both falsey and both select federated token retrieval.
-- mutant: ci_workflows.checks.x_main__mutmut_421
-  reason: When TS_ACCESS_TOKEN is absent, None and the empty string are both falsey
-    and both select federated token retrieval.
 - mutant: ci_workflows.checks.x_select_functions__mutmut_21
   reason: The initial generated set is overwritten in mutmut mode and never read in
     ordinary function-selection mode.
-- mutant: ci_workflows.checks.x_select_functions__mutmut_28
-  reason: Python package metadata lookup canonicalizes distribution names;
-    version("MUTMUT") and version("mutmut") return the same installed version.
-- mutant: ci_workflows.checks.x_select_functions__mutmut_80
+- mutant: ci_workflows.checks.x_main__mutmut_514
+  reason: When TS_ACCESS_TOKEN is absent, None and the empty string are both falsey
+    and both select federated token retrieval.
+- mutant: ci_workflows.checks.x_main__mutmut_516
+  reason: When TS_ACCESS_TOKEN is absent, the omitted get default and the empty string
+    are both falsey and both select federated token retrieval.
+- mutant: ci_workflows.checks.x_select_functions__mutmut_74
   reason: This passes candidate as the nested owner in ordinary mode, where candidate
     already equals dotted_name. In mutmut mode the original already passes candidate.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_32
+  reason: The placeholder method name is removed by rpartition('.') straight after,
+    so None names the same module as "x".
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_35
+  reason: The placeholder method name is removed by rpartition('.') straight after,
+    so "XXxXX" names the same module as "x".
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_36
+  reason: The placeholder method name is removed by rpartition('.') straight after,
+    so "X" names the same module as "x".
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_226
+  reason: A mutmut name holds __mutmut_ once, so rpartition and partition cut it at
+    the same place.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_227
+  reason: mutmut's function part holds no dot, so cutting at the last dot gives the
+    same module whether or not the __mutmut_ suffix was removed first.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_228
+  reason: mutmut's function part holds no dot, so cutting at the last dot gives the
+    same module whether or not the __mutmut_ suffix was removed first.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_237
+  reason: A mutmut name holds __mutmut_ once, so rpartition and partition cut it at
+    the same place.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_238
+  reason: mutmut's function part holds no dot, so cutting at the last dot gives the
+    same module whether or not the __mutmut_ suffix was removed first.
+- mutant: ci_workflows.checks.x_survivor_check__mutmut_239
+  reason: mutmut's function part holds no dot, so cutting at the last dot gives the
+    same module whether or not the __mutmut_ suffix was removed first.
+- mutant: ci_workflows.mutation.x_load_mutmut__mutmut_3
+  reason: Python package metadata lookup canonicalizes distribution names;
+    version("MUTMUT") and version("mutmut") return the same installed version.
+- mutant: ci_workflows.mutation.x_plan__mutmut_48
+  reason: With no shards the loop never runs, so the unused base and extra values
+    change nothing.
+- mutant: ci_workflows.mutation.x_plan__mutmut_49
+  reason: With no shards the loop never runs, so the unused base and extra values
+    change nothing.

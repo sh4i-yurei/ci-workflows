@@ -939,7 +939,7 @@ def test_mutmut_version_mismatch_is_configuration_error(tmp_path, monkeypatch):
         "diff --git a/pkg/f.py b/pkg/f.py\n--- a/pkg/f.py\n+++ b/pkg/f.py\n"
         "@@ -1,0 +2,1 @@\n+    return 1\n"
     )
-    monkeypatch.setattr("ci_workflows.checks.version", lambda name: "3.9.0")
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "3.9.0")
     assert invoke(
         "select-functions",
         "--source",

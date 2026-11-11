@@ -148,6 +148,14 @@ def test_architecture_documents_local_mutation_and_push_only_ci():
     assert "CI always runs mutation fresh" not in architecture
 
 
+def test_architecture_assigns_mutation_ownership():
+    architecture = (ROOT / "ARCHITECTURE.md").read_text()
+    rows = [line for line in architecture.splitlines() if line.startswith("| `")]
+    checks = "| `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`; it also parses `mutation-plan` and `mutation-merge` and hands them to `mutation.py`. | Grow another kind of check; a new kind gets its own module, as `rules.py`, `tailnet.py` and `mutation.py` did |"
+    mutation = "| `ci_workflows/mutation.py` | Loading mutmut 3.8.0 for every command that needs it, listing a file's mutant names, planning a run's shards (`mutation-plan`) and merging shards' results (`mutation-merge`). | Judge survivors; the survivors gate in `checks.py` does |"
+    assert rows[rows.index(checks) + 1] == mutation
+
+
 @pytest.mark.parametrize(
     ("source_config", "mismatch", "expected_code", "expected_error"),
     [
