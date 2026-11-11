@@ -14,13 +14,17 @@ import tempfile
 import tomllib
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import yaml
 from unidiff import PatchSet
 
 from ci_workflows.errors import ConfigurationError
+from ci_workflows.mutation import (
+    load_mutmut,
+    merge as mutation_merge,
+    plan as mutation_plan,
+)
 from ci_workflows.rules import alert_cases
 from ci_workflows.tailnet import policy_cases
 from ci_workflows.survivors import load_explanations
@@ -405,15 +409,9 @@ def select_functions(
     gaps: set[str] = set()
     generated: set[str] = set()
     if mutmut_names:
-        error = "mutmut 3.8.0 is required for Python function selection"
-        try:
-            if version("mutmut") != "3.8.0":
-                raise ConfigurationError(error)
-            from mutmut.mutation.file_mutation import mutate_file_contents
-            from mutmut.mutation.pragma_handling import PragmaParseError
-            from mutmut.utils.format_utils import get_mutant_name, make_mutant_key
-        except (ImportError, PackageNotFoundError) as exc:
-            raise ConfigurationError(error) from exc
+        mutate_file_contents, PragmaParseError, get_mutant_name, make_mutant_key = (
+            load_mutmut("mutmut 3.8.0 is required for Python function selection")
+        )
 
         try:
             generated = {
@@ -465,7 +463,25 @@ def survivor_check(
     result_format: str,
     selected_functions: list[str] | None = None,
     selected_files: list[str] | None = None,
+    source_config: Path | None = None,
 ) -> tuple[int, str]:
+    if source_config is not None and result_format != "mutmut":
+        raise ConfigurationError("--source-config applies only to mutmut results")
+    source_modules: set[str] = set()
+    if source_config is not None:
+        _, _, get_mutant_name, _ = load_mutmut(
+            "mutmut 3.8.0 is required for the survivors source scope"
+        )
+        for root in read_source_paths(source_config):
+            root_path = Path(root)
+            files = (
+                [root_path]
+                if root_path.is_file() and root_path.suffix == ".py"
+                else root_path.rglob("*.py")
+            )
+            source_modules.update(
+                get_mutant_name(file, "x").rpartition(".")[0] for file in files
+            )
     statuses: dict[str, int | str | None] = {}
     if result_format == "mutmut":
         files = (
@@ -563,6 +579,13 @@ def survivor_check(
                 and statuses[name] is None
                 and not in_scope(name)
             )
+        if source_config is not None and "__mutmut_" in name:
+            module = name.partition("__mutmut_")[0].rpartition(".")[0]
+            if not any(
+                result.partition("__mutmut_")[0].rpartition(".")[0] == module
+                for result in statuses
+            ):
+                return module in source_modules
         return (
             result_format == "stryker"
             and not in_scope(name)
@@ -652,12 +675,20 @@ def main(argv: list[str] | None = None) -> int:
     functions.add_argument("--source-name", required=True)
     functions.add_argument("--diff-file", type=Path, required=True)
     functions.add_argument("--mutmut", action="store_true")
+    plan_parser = commands.add_parser("mutation-plan")
+    plan_parser.add_argument("--source", action="append", required=True)
+    plan_parser.add_argument("--selected-function", action="append", required=True)
+    plan_parser.add_argument("--per-shard", type=int, default=200)
+    merge_parser = commands.add_parser("mutation-merge")
+    merge_parser.add_argument("--into", required=True)
+    merge_parser.add_argument("--shard", action="append", required=True)
     survivors = commands.add_parser("survivors")
     survivors.add_argument("--format", choices=["mutmut", "stryker"], required=True)
     survivors.add_argument("--results", type=Path, required=True)
     survivors.add_argument("--survivors-file", type=Path, required=True)
     survivors.add_argument("--selected-function", action="append")
     survivors.add_argument("--selected-file", action="append")
+    survivors.add_argument("--source-config", type=Path)
     source_filter = commands.add_parser("filter-sources")
     roots = source_filter.add_mutually_exclusive_group(required=True)
     roots.add_argument("--config", type=Path)
@@ -680,11 +711,31 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     error_stream = (
         sys.stderr
-        if args.command in {"select-functions", "filter-sources", "source-paths"}
+        if args.command
+        in {
+            "select-functions",
+            "filter-sources",
+            "source-paths",
+            "mutation-plan",
+            "mutation-merge",
+        }
         else sys.stdout
     )
     try:
-        if args.command == "changed-lines":
+        if args.command == "mutation-plan":
+            print(
+                json.dumps(
+                    mutation_plan(args.source, args.selected_function, args.per_shard),
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        elif args.command == "mutation-merge":
+            print(
+                mutation_merge(Path(args.into), [Path(shard) for shard in args.shard])
+            )
+            return 0
+        elif args.command == "changed-lines":
             code, message = changed_lines(
                 args.report,
                 args.diff_file,
@@ -746,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.format,
                 args.selected_function,
                 args.selected_file,
+                args.source_config,
             )
     except SyntaxError as exc:
         print(

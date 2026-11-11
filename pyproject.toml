@@ -17,7 +17,7 @@ mutation = ["mutmut==3.8.0"]
 
 [tool.mutmut]
 source_paths = ["ci_workflows"]
-pytest_add_cli_args_test_selection = ["tests/test_python_checks.py", "tests/test_python_edges.py", "tests/test_other_languages.py", "tests/test_rules.py", "tests/test_tailnet_mutation.py"]
+pytest_add_cli_args_test_selection = ["tests/test_python_checks.py", "tests/test_python_edges.py", "tests/test_other_languages.py", "tests/test_rules.py", "tests/test_tailnet_mutation.py", "tests/test_mutation.py"]
 also_copy = ["tests/fixtures/alerts", "tests/fixtures/tailscale"]
 cache_invalidation_files = ["tests/*.py"]
 on_dependency_change = "rerun"
