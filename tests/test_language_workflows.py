@@ -18,7 +18,7 @@ def test_base_sha_steps_pass_branch_context_only_to_glue():
     base = "${{ github.event.pull_request.base.sha || github.event.before }}"
     branch = "${{ github.event.repository.default_branch }}"
     pushed = "${{ github.event_name == 'push' && github.ref_name || '' }}"
-    counts = {"python.yml": 2, "javascript.yml": 2, "shell.yml": 2, "powershell.yml": 2}
+    counts = {"python.yml": 3, "javascript.yml": 2, "shell.yml": 2, "powershell.yml": 2}
     for name, count in counts.items():
         steps = [
             step for job in workflow(name)["jobs"].values() for step in job["steps"]

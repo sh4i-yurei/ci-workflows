@@ -14,10 +14,17 @@ on:
       caller_job:
         required: true
         type: string
+      system_packages:
+        required: false
+        type: string
+        default: '[]'
 permissions:
   contents: read
+concurrency:
+  group: ci-workflows-python-${{ github.workflow }}-${{ inputs.caller_job }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 jobs:
-  checks:
+  tests:
     runs-on: ubuntu-latest
     steps:
       - name: Check out caller
@@ -34,6 +41,15 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+      - name: Install system packages
+        if: inputs.system_packages != '[]'
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system_packages }}
+        run: |
+          packages=$(jq -r '.[]' <<< "$SYSTEM_PACKAGES")
+          mapfile -t names <<< "$packages"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "${names[@]}"
       - name: Install shared checks
         run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e .ci-workflows
       - name: Install caller
@@ -59,3 +75,138 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: bash .ci-workflows/scripts/workflow-glue.sh changed python coverage.xml
+  plan:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      skipped: ${{ steps.plan.outputs.skipped }}
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e '.ci-workflows[mutation]'
+      - name: Plan mutation
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSHED_REF: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh plan-python
+      - name: Upload plan
+        if: steps.plan.outputs.skipped == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation.${{ inputs.caller_job }}.plan
+          path: mutation-plan.json
+          if-no-files-found: error
+          overwrite: true
+  mutate:
+    needs: plan
+    if: needs.plan.result == 'success' && needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - name: Record job start
+        run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install system packages
+        if: inputs.system_packages != '[]'
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system_packages }}
+        run: |
+          packages=$(jq -r '.[]' <<< "$SYSTEM_PACKAGES")
+          mapfile -t names <<< "$packages"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "${names[@]}"
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e '.ci-workflows[mutation]'
+      - name: Install caller
+        run: bash -e -o pipefail -c "$INSTALL_COMMAND"
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+      - name: Download plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation.${{ inputs.caller_job }}.plan
+          path: .
+      - name: Run mutation shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh shard-python "$SHARD"
+      - name: Upload shard results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation.${{ inputs.caller_job }}.shard.${{ matrix.shard }}
+          path: mutation-results/
+          if-no-files-found: error
+          overwrite: true
+  checks:
+    needs: [tests, plan, mutate]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out pinned shared checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install shared checks
+        run: python -m pip install --constraint .ci-workflows/requirements/ci-lock.txt -e '.ci-workflows[mutation]'
+      - name: Download plan
+        if: needs.plan.result == 'success' && needs.plan.outputs.skipped == ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation.${{ inputs.caller_job }}.plan
+          path: .
+      - name: Download shard results
+        if: needs.mutate.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation.${{ inputs.caller_job }}.shard.*
+          path: mutation-shards
+          merge-multiple: true
+      - name: Judge mutation
+        env:
+          TESTS_RESULT: ${{ needs.tests.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          MUTATE_RESULT: ${{ needs.mutate.result }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          PLAN_SKIPPED: ${{ needs.plan.outputs.skipped }}
+        run: bash .ci-workflows/scripts/workflow-glue.sh checks-python
