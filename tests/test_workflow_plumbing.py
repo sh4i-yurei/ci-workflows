@@ -1,8 +1,11 @@
 """Exercise the shell commands used by the reusable workflows."""
 
 import os
+import json
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -506,10 +509,41 @@ def mutation_stubs(commits, tmp_path):
     for name, body in {
         "python": """case $3 in
 filter-sources) cat ;;
-select-functions) cat >/dev/null; printf '["pkg.f.x_one","pkg.f.x_two"]\\n' ;;
+select-functions)
+  cat >/dev/null
+  source_file=$5
+  if [[ -n ${STUB_SELECTION:-} ]]; then
+    jq -c --arg source "$source_file" '.[$source] // []' <<< "$STUB_SELECTION"
+  else
+    printf '["pkg.f.x_one","pkg.f.x_two"]\\n'
+  fi ;;
+mutation-plan)
+  printf 'python ' >> "$CALL_LOG"
+  printf '%s|' "$@" >> "$CALL_LOG"
+  printf '\\n' >> "$CALL_LOG"
+  if [[ -n ${STUB_PLAN_EXIT:-} ]]; then
+    echo 'configuration error: stub plan failure' >&2
+    exit "$STUB_PLAN_EXIT"
+  fi
+  cat "$PLAN_JSON" ;;
+mutation-config|mutation-checks)
+  printf 'python ' >> "$CALL_LOG"
+  printf '%s|' "$@" >> "$CALL_LOG"
+  printf '\\n' >> "$CALL_LOG"
+  exit "${STUB_EXIT:-0}" ;;
 survivors) printf 'python %s\\n' "$*" >> "$CALL_LOG" ;;
 esac""",
-        "mutmut": 'printf \'mutmut %s\\n\' "$*" >> "$CALL_LOG"',
+        "mutmut": """printf 'mutmut %s\\n' "$*" >> "$CALL_LOG"
+if [[ -n ${STUB_MUTMUT_SHARD:-} ]]; then
+  if [[ -z ${STUB_MUTMUT_QUIET:-} ]]; then
+    printf 'Running mutation testing\\n    5.00 mutations/second\\n'
+  fi
+  mkdir -p mutants/sample mutants/.cache
+  printf 'other meta\\n' > mutants/sample/other.py.meta
+  printf 'init meta\\n' > mutants/sample/__init__.py.meta
+  printf 'stray meta\\n' > mutants/.cache/stray.meta
+  exit "${STUB_MUTMUT_EXIT:-0}"
+fi""",
         "npx": 'printf \'npx argc=%s %s\\n\' "$#" "$*" >> "$CALL_LOG"',
     }.items():
         executable = bin_dir / name
@@ -616,6 +650,374 @@ def test_mutation_does_not_skip_without_default_branch(mutation_stubs):
     )
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
     assert log.read_text() == PYTHON_MUTATION_CALLS
+
+
+PLAN = {
+    "functions": ["sample.other.x_twice", "sample.x_add"],
+    "sources": ["sample/other.py", "sample/__init__.py"],
+    "mutants": 6,
+    "shards": [
+        ["sample.other.x_twice__mutmut_1", "sample.other.x_twice__mutmut_2"],
+        ["sample.other.x_twice__mutmut_3", "sample.other.x_twice__mutmut_4"],
+        ["sample.other.x_twice__mutmut_5", "sample.x_add__mutmut_1"],
+    ],
+}
+PLAN_CALL = "python -m|ci_workflows|mutation-plan|--source|src/app.py|--selected-function|pkg.f.x_one|--selected-function|pkg.f.x_two|\n"
+
+
+def plan_setup(mutation_stubs):
+    repo, base, env, log = mutation_stubs
+    plan = repo / "stub-plan.json"
+    plan.write_text(json.dumps(PLAN))
+    output = repo / "github-output"
+    output.write_text("")
+    return (
+        repo,
+        base,
+        {**env, "PLAN_JSON": str(plan), "GITHUB_OUTPUT": str(output)},
+        log,
+        output,
+    )
+
+
+def test_plan_python_default_branch_skips(mutation_stubs):
+    repo, base, env, log, output = plan_setup(mutation_stubs)
+    result = run(
+        repo,
+        "plan-python",
+        base_sha=base,
+        extra_env={**env, "DEFAULT_BRANCH": "main", "PUSHED_REF": "main"},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation skipped: push to the default branch main\n",
+        "",
+    )
+    assert output.read_text() == "shards=[]\nskipped=push to the default branch main\n"
+    assert not log.exists() and not (repo / "mutation-plan.json").exists()
+
+
+def test_plan_python_no_functions_skips(mutation_stubs):
+    repo, base, env, log, output = plan_setup(mutation_stubs)
+    env["STUB_SELECTION"] = json.dumps({"src/app.py": []})
+    result = run(repo, "plan-python", base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation skipped: no Python function changed\n",
+        "",
+    )
+    assert output.read_text() == "shards=[]\nskipped=no Python function changed\n"
+    assert not log.exists() and not (repo / "mutation-plan.json").exists()
+
+
+def test_plan_python_uses_selected_source_and_shard_numbers(mutation_stubs):
+    repo, base, env, log, output = plan_setup(mutation_stubs)
+    result = run(repo, "plan-python", base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation plan: 6 mutants in 3 shards\n",
+        "",
+    )
+    assert log.read_text() == PLAN_CALL
+    assert (repo / "mutation-plan.json").read_text() == (
+        repo / "stub-plan.json"
+    ).read_text()
+    assert output.read_text() == "shards=[0,1,2]\nskipped=\n"
+
+
+def test_plan_python_passes_only_sources_with_functions(mutation_stubs):
+    repo, base, env, log, _ = plan_setup(mutation_stubs)
+    for name in ("a", "b", "c"):
+        (repo / f"src/{name}.py").write_text("x = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "three files")
+    env["STUB_SELECTION"] = json.dumps({"src/b.py": ["src.b.x_one"]})
+    result = run(repo, "plan-python", base_sha=base, extra_env=env)
+    assert result.returncode == 0
+    assert (
+        log.read_text()
+        == "python -m|ci_workflows|mutation-plan|--source|src/b.py|--selected-function|src.b.x_one|\n"
+    )
+
+
+def test_plan_python_keeps_empty_plan(mutation_stubs):
+    repo, base, env, _, output = plan_setup(mutation_stubs)
+    empty = {"functions": [], "sources": ["src/app.py"], "mutants": 0, "shards": []}
+    (repo / "stub-plan.json").write_text(json.dumps(empty))
+    result = run(repo, "plan-python", base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation plan: 0 mutants in 0 shards\n",
+        "",
+    )
+    assert (repo / "mutation-plan.json").read_text() == json.dumps(empty)
+    assert output.read_text() == "shards=[]\nskipped=\n"
+
+
+@pytest.mark.parametrize(
+    "branch,ref", [("feature", "feature"), (None, ""), (None, "main-fix")]
+)
+def test_plan_python_branch_inputs(mutation_stubs, branch, ref):
+    repo, base, env, log, output = plan_setup(mutation_stubs)
+    if branch or ref == "main-fix":
+        feature_branch(repo, base)
+    if ref == "main-fix":
+        git(repo, "branch", "-M", "main-fix")
+    result = run(
+        repo,
+        "plan-python",
+        base_sha=base,
+        extra_env={**env, "DEFAULT_BRANCH": "main", "PUSHED_REF": ref},
+    )
+    expected_stderr = (
+        f"base {base} is the merge base of HEAD and origin/main\n" * 2
+        if branch or ref == "main-fix"
+        else ""
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation plan: 6 mutants in 3 shards\n",
+        expected_stderr,
+    )
+    assert log.read_text() == PLAN_CALL
+    assert (repo / "mutation-plan.json").read_text() == (
+        repo / "stub-plan.json"
+    ).read_text()
+    assert output.read_text() == "shards=[0,1,2]\nskipped=\n"
+
+
+def test_plan_python_failure_does_not_publish_outputs(mutation_stubs):
+    repo, base, env, log, output = plan_setup(mutation_stubs)
+    result = run(
+        repo, "plan-python", base_sha=base, extra_env={**env, "STUB_PLAN_EXIT": "2"}
+    )
+    assert (
+        result.returncode == 2
+        and "configuration error: stub plan failure" in result.stderr
+    )
+    assert log.read_text() == PLAN_CALL
+    assert output.read_text() == ""
+
+
+def test_plan_python_requires_github_output(mutation_stubs):
+    repo, base, env, log, _ = plan_setup(mutation_stubs)
+    del env["GITHUB_OUTPUT"]
+    result = run(repo, "plan-python", base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        2,
+        "",
+        "GITHUB_OUTPUT is not set\n",
+    )
+    assert not log.exists()
+
+
+def shard_setup(mutation_stubs):
+    repo, base, env, log, _ = plan_setup(mutation_stubs)
+    (repo / "mutation-plan.json").write_text(json.dumps(PLAN))
+    summary = repo / "summary"
+    summary.write_text("")
+    return (
+        repo,
+        base,
+        {
+            **env,
+            "JOB_STARTED": str(int(time.time()) - 30),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "STUB_MUTMUT_SHARD": "1",
+        },
+        log,
+        summary,
+    )
+
+
+@pytest.mark.parametrize(
+    "number,names",
+    [(0, PLAN["shards"][0]), (1, PLAN["shards"][1]), (2, PLAN["shards"][2])],
+)
+def test_shard_python_runs_exact_names_and_copies_visible_meta(
+    mutation_stubs, number, names
+):
+    repo, base, env, log, summary = shard_setup(mutation_stubs)
+    t0 = int(time.time())
+    env["JOB_STARTED"] = str(t0 - 30)
+    result = run(repo, "shard-python", str(number), base_sha=base, extra_env=env)
+    t1 = int(time.time())
+    assert result.returncode == 0
+    assert (
+        "Running mutation testing" in result.stdout
+        and "5.00 mutations/second" in result.stdout
+    )
+    assert log.read_text() == (
+        "python -m|ci_workflows|mutation-config|--config|pyproject.toml|--source|sample/other.py|--source|sample/__init__.py|\n"
+        + "mutmut run "
+        + " ".join(names)
+        + "\n"
+    )
+    for name, content in (
+        ("other.py.meta", "other meta\n"),
+        ("__init__.py.meta", "init meta\n"),
+    ):
+        assert (
+            repo / "mutation-results" / str(number) / "sample" / name
+        ).read_text() == content
+    assert not (repo / "mutation-results" / str(number) / ".cache").exists()
+    match = re.fullmatch(
+        rf"shard {number + 1} of 3: 2 mutants, setup (\d+) s, 5\.00 mutations/second\n",
+        summary.read_text(),
+    )
+    assert match and 30 <= int(match[1]) <= t1 - t0 + 30
+
+
+def test_shard_python_quiet_fallback(mutation_stubs):
+    repo, base, env, _, summary = shard_setup(mutation_stubs)
+    result = run(
+        repo,
+        "shard-python",
+        "1",
+        base_sha=base,
+        extra_env={**env, "STUB_MUTMUT_QUIET": "1"},
+    )
+    assert result.returncode == 0
+    assert (
+        summary.read_text()
+        == "shard 2 of 3: 2 mutants, setup unknown, mutations/second unknown\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "failure,expected,code",
+    [("STUB_MUTMUT_EXIT", "mutmut run", 1), ("STUB_EXIT", "mutation-config", 2)],
+)
+def test_shard_python_stops_on_failure(mutation_stubs, failure, expected, code):
+    repo, base, env, log, summary = shard_setup(mutation_stubs)
+    result = run(
+        repo, "shard-python", "1", base_sha=base, extra_env={**env, failure: str(code)}
+    )
+    assert result.returncode == code and expected in log.read_text()
+    if failure == "STUB_EXIT":
+        assert log.read_text() == (
+            "python -m|ci_workflows|mutation-config|--config|pyproject.toml|"
+            "--source|sample/other.py|--source|sample/__init__.py|\n"
+        )
+    assert not (repo / "mutation-results").exists() and summary.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    "argument,missing,message",
+    [
+        (None, None, "shard-python needs a shard number\n"),
+        ("x", None, "shard number must be a whole number: x\n"),
+        ("3", None, "no shard 3 in mutation-plan.json\n"),
+        ("1", "JOB_STARTED", "JOB_STARTED is not set\n"),
+        ("1", "GITHUB_STEP_SUMMARY", "GITHUB_STEP_SUMMARY is not set\n"),
+        ("1", "plan", "mutation-plan.json not found\n"),
+    ],
+)
+def test_shard_python_refuses_bad_inputs(mutation_stubs, argument, missing, message):
+    repo, base, env, log, _ = shard_setup(mutation_stubs)
+    if missing == "plan":
+        (repo / "mutation-plan.json").unlink()
+    elif missing:
+        del env[missing]
+    args = () if argument is None else (argument,)
+    result = run(repo, "shard-python", *args, base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (2, "", message)
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(
+    "private,reason,expected",
+    [
+        ("true", "no Python function changed", "--private|"),
+        (
+            "false",
+            "push to the default branch main",
+            "--skipped|push to the default branch main|",
+        ),
+        (
+            "false",
+            "",
+            "--plan-file|mutation-plan.json|--shards|mutation-shards|--survivors-file|.mutation-survivors.yml|--source-config|pyproject.toml|",
+        ),
+    ],
+)
+def test_checks_python_passes_exact_mode(mutation_stubs, private, reason, expected):
+    repo, base, env, log = mutation_stubs
+    results = {
+        "TESTS_RESULT": "success",
+        "PLAN_RESULT": "skipped" if private == "true" else "success",
+        "MUTATE_RESULT": "skipped" if reason else "success",
+        "REPOSITORY_PRIVATE": private,
+        "PLAN_SKIPPED": reason,
+    }
+    result = run(repo, "checks-python", base_sha=base, extra_env={**env, **results})
+    assert result.returncode == 0
+    assert (
+        log.read_text()
+        == "python -m|ci_workflows|mutation-checks|--tests|success|--plan|"
+        + results["PLAN_RESULT"]
+        + "|--mutate|"
+        + results["MUTATE_RESULT"]
+        + "|"
+        + expected
+        + "\n"
+    )
+
+
+@pytest.mark.parametrize("code", [1, 2])
+def test_checks_python_propagates_exit(mutation_stubs, code):
+    repo, base, env, _ = mutation_stubs
+    result = run(
+        repo,
+        "checks-python",
+        base_sha=base,
+        extra_env={
+            **env,
+            "TESTS_RESULT": "success",
+            "PLAN_RESULT": "success",
+            "MUTATE_RESULT": "success",
+            "STUB_EXIT": str(code),
+        },
+    )
+    assert result.returncode == code
+
+
+def test_checks_python_real_private_cli(commits):
+    repo, base = commits
+    result = run(
+        repo,
+        "checks-python",
+        base_sha=base,
+        extra_env={
+            "TESTS_RESULT": "success",
+            "PLAN_RESULT": "skipped",
+            "MUTATE_RESULT": "skipped",
+            "REPOSITORY_PRIVATE": "true",
+        },
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "mutation skipped in a private repository\n",
+        "",
+    )
+
+
+@pytest.mark.parametrize("missing", ["TESTS_RESULT", "PLAN_RESULT", "MUTATE_RESULT"])
+def test_checks_python_requires_results(mutation_stubs, missing):
+    repo, base, env, log = mutation_stubs
+    results = {
+        "TESTS_RESULT": "success",
+        "PLAN_RESULT": "success",
+        "MUTATE_RESULT": "success",
+    }
+    del results[missing]
+    result = run(repo, "checks-python", base_sha=base, extra_env={**env, **results})
+    assert (result.returncode, result.stdout, result.stderr) == (
+        2,
+        "",
+        f"{missing} is not set\n",
+    )
+    assert not log.exists()
 
 
 def test_ci_runs_pinned_actionlint_and_shared_dependencies_are_exact():

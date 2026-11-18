@@ -114,11 +114,13 @@ changed_gate() {
   diff_files patch | "$PYTHON" -m ci_workflows "${args[@]}"
 }
 
-mutate_python() {
-  local -a changed=() selected=() functions=() selectors=() scope=()
-  local source selected_text function
+select_python_functions() {
+  changed_sources=()
+  functions=()
+  local -a changed=() selected=()
+  local source selected_text
   local changed_text
-  changed_text=$(diff_files names '*.py' | sources python)
+  changed_text=$(diff_files names '*.py' | sources python) || return $?
   if [[ -n $changed_text ]]; then mapfile -t changed <<< "$changed_text"; fi
   for source in "${changed[@]}"; do
     [[ -f $source ]] || continue
@@ -128,8 +130,15 @@ mutate_python() {
     fi
     selected=()
     if [[ -n $selected_text ]]; then mapfile -t selected <<< "$selected_text"; fi
+    if (( ${#selected[@]} )); then changed_sources+=("$source"); fi
     functions+=("${selected[@]}")
   done
+}
+
+mutate_python() {
+  local -a changed_sources=() functions=() selectors=() scope=()
+  local function
+  select_python_functions || return $?
   if (( ${#functions[@]} )); then
     for function in "${functions[@]}"; do
       selectors+=("${function}__mutmut_*")
@@ -138,6 +147,112 @@ mutate_python() {
     mutmut run "${selectors[@]}"
     "$PYTHON" -m ci_workflows survivors --format mutmut --results mutants --survivors-file .mutation-survivors.yml "${scope[@]}"
   fi
+}
+
+plan_python() {
+  if [[ -z ${GITHUB_OUTPUT:-} ]]; then
+    echo 'GITHUB_OUTPUT is not set' >&2
+    return 2
+  fi
+  local reason='' shard_numbers mutants count
+  local -a changed_sources=() functions=() args=(mutation-plan)
+  if [[ -n ${PUSHED_REF:-} && -n ${DEFAULT_BRANCH:-} && $PUSHED_REF == "$DEFAULT_BRANCH" ]]; then
+    reason="push to the default branch $DEFAULT_BRANCH"
+  else
+    select_python_functions || return $?
+    if (( ${#functions[@]} == 0 )); then reason='no Python function changed'; fi
+  fi
+  if [[ -n $reason ]]; then
+    printf 'mutation skipped: %s\n' "$reason"
+    printf 'shards=[]\nskipped=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+    return 0
+  fi
+  local source function
+  for source in "${changed_sources[@]}"; do args+=(--source "$source"); done
+  for function in "${functions[@]}"; do args+=(--selected-function "$function"); done
+  "$PYTHON" -m ci_workflows "${args[@]}" > mutation-plan.json || return $?
+  shard_numbers=$(jq -c '[range(.shards | length)]' mutation-plan.json) || return $?
+  mutants=$(jq -r '.mutants' mutation-plan.json) || return $?
+  count=$(jq -r '.shards | length' mutation-plan.json) || return $?
+  printf 'mutation plan: %s mutants in %s shards\n' "$mutants" "$count"
+  printf 'shards=%s\nskipped=\n' "$shard_numbers" >> "$GITHUB_OUTPUT"
+}
+
+shard_python() {
+  if (( $# == 0 )); then echo 'shard-python needs a shard number' >&2; return 2; fi
+  local number=$1
+  if [[ ! $number =~ ^[0-9]+$ ]]; then
+    printf 'shard number must be a whole number: %s\n' "$number" >&2
+    return 2
+  fi
+  number=$((10#$number))
+  if [[ -z ${JOB_STARTED:-} ]]; then echo 'JOB_STARTED is not set' >&2; return 2; fi
+  if [[ -z ${GITHUB_STEP_SUMMARY:-} ]]; then echo 'GITHUB_STEP_SUMMARY is not set' >&2; return 2; fi
+  if [[ ! -f mutation-plan.json ]]; then echo 'mutation-plan.json not found' >&2; return 2; fi
+  local count
+  count=$(jq -r '.shards | length' mutation-plan.json) || return 2
+  if (( number >= count )); then
+    printf 'no shard %s in mutation-plan.json\n' "$number" >&2
+    return 2
+  fi
+  local -a sources=() names=() args=(mutation-config --config pyproject.toml)
+  mapfile -t sources < <(jq -r '.sources[]' mutation-plan.json)
+  mapfile -t names < <(jq -r --argjson n "$number" '.shards[$n][]' mutation-plan.json)
+  local source
+  for source in "${sources[@]}"; do args+=(--source "$source"); done
+  "$PYTHON" -m ci_workflows "${args[@]}" || return $?
+
+  local timing_dir status setup='unknown' speed='mutations/second unknown' line relative file
+  timing_dir=$(mktemp -d)
+  if mutmut run "${names[@]}" | {
+    while IFS= read -r line || [[ -n $line ]]; do
+      printf '%s\n' "$line"
+      if [[ $line == *'Running mutation testing'* && ! -f $timing_dir/started ]]; then
+        date +%s > "$timing_dir/started"
+      fi
+      if [[ $line == *'mutations/second'* ]]; then
+        printf '%s\n' "${line##*$'\r'}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' > "$timing_dir/speed"
+      fi
+    done
+  }; then
+    status=0
+  else
+    status=${PIPESTATUS[0]}
+  fi
+  if (( status != 0 )); then rm -rf "$timing_dir"; return "$status"; fi
+  if [[ -f $timing_dir/started ]]; then setup=$(( $(<"$timing_dir/started") - JOB_STARTED )); fi
+  if [[ -f $timing_dir/speed ]]; then speed=$(<"$timing_dir/speed"); fi
+  rm -rf "$timing_dir"
+
+  if [[ -d mutants ]]; then
+    while IFS= read -r -d '' file; do
+      relative=${file#mutants/}
+      [[ /$relative == */.*/* ]] && continue
+      mkdir -p "mutation-results/$number/$(dirname "$relative")"
+      cp "$file" "mutation-results/$number/$relative"
+    done < <(find mutants -type f -name '*.meta' -print0)
+  fi
+  if [[ $setup != unknown ]]; then setup="$setup s"; fi
+  printf 'shard %s of %s: %s mutants, setup %s, %s\n' "$((number + 1))" "$count" "${#names[@]}" "$setup" "$speed" >> "$GITHUB_STEP_SUMMARY"
+}
+
+checks_python() {
+  local required
+  for required in TESTS_RESULT PLAN_RESULT MUTATE_RESULT; do
+    if [[ -z ${!required:-} ]]; then
+      printf '%s is not set\n' "$required" >&2
+      return 2
+    fi
+  done
+  local -a args=(mutation-checks --tests "$TESTS_RESULT" --plan "$PLAN_RESULT" --mutate "$MUTATE_RESULT")
+  if [[ ${REPOSITORY_PRIVATE:-} == true ]]; then
+    args+=(--private)
+  elif [[ -n ${PLAN_SKIPPED:-} ]]; then
+    args+=(--skipped "$PLAN_SKIPPED")
+  else
+    args+=(--plan-file mutation-plan.json --shards mutation-shards --survivors-file .mutation-survivors.yml --source-config pyproject.toml)
+  fi
+  "$PYTHON" -m ci_workflows "${args[@]}"
 }
 
 mutate_javascript() {
@@ -170,6 +285,9 @@ case $command in
   floor) floor_gate "$@" ;;
   changed) changed_gate "$@" ;;
   mutate-python) mutate_python ;;
+  plan-python) plan_python ;;
+  shard-python) shard_python "$@" ;;
+  checks-python) checks_python ;;
   mutate-javascript) mutate_javascript ;;
   *) echo "unknown command: $command" >&2; exit 2 ;;
 esac
