@@ -6,7 +6,7 @@ These public reusable GitHub Actions workflows run the checks in the testing sta
 
 | Workflow | Checks |
 | --- | --- |
-| `python.yml` | pytest branch coverage, changed lines, and floor |
+| `python.yml` | pytest branch coverage, changed lines, floor, and mutation of the changed functions |
 | `javascript.yml` | Node test runner branch coverage, changed lines, and floor |
 | `shell.yml` | Bats under kcov, changed lines, and floor |
 | `powershell.yml` | Pester 5.7.1 tests on Windows PowerShell 5.1; changed lines and floor on Linux |
@@ -17,9 +17,11 @@ These public reusable GitHub Actions workflows run the checks in the testing sta
 ## Inputs
 
 On a push to a branch other than the default branch, the changed-line and floor steps compare with the merge base of that branch and the default branch.
-The Python and JavaScript workflows do not mutate. A caller runs mutation locally before pushing with this repository's `scripts/workflow-glue.sh mutate-python` or `scripts/workflow-glue.sh mutate-javascript`. Those commands use the same selection and survivors gate as before.
+The Python workflow mutates the functions a push changes, as the Python mutation section describes. The JavaScript workflow does not mutate; a caller runs `scripts/workflow-glue.sh mutate-javascript` locally before pushing. A caller can also run Python mutation locally with `scripts/workflow-glue.sh mutate-python`, which uses the same selection and survivors gate as CI.
 
 Each language workflow accepts the caller's required numeric `coverage_floor` from 0 to 100. The Python workflow also requires `install_command` (how to install the caller's code and tests) and `caller_workflow` (the path to the caller's workflow for the floor comparison). It reads `[tool.mutmut].source_paths` from the caller's `pyproject.toml` to measure coverage over every declared path and to scope its changed-line step and local mutation command. A pull request must keep its floor at or above the base branch's value. The Python, JavaScript, shell, and PowerShell workflows require coverage reports produced by their test steps. The Molecule workflow runs the caller's `molecule/` scenarios. The Prometheus and Tailscale workflows take paths to caller rule tests and policy files.
+
+The Python workflow also accepts `system_packages`, a JSON list of apt packages such as `["podman"]`, which defaults to `[]`. Its tests and mutate jobs install them in a step of their own before the caller's `install_command` runs, so an install command never needs `apt-get`.
 
 Every language workflow also requires `caller_job`, the job ID in the caller workflow that invokes it. The floor ratchet checks that job in the working-tree caller workflow and reads its base floor, so different jobs may use different floors. When a pull request adds the job for the first time, the missing base job has no prior floor; the new job's requested floor and reported coverage are still checked.
 
@@ -36,6 +38,14 @@ The Prometheus workflow requires `test_files`, a JSON list of promtool rule-test
 The Tailscale workflow requires `policy_file` and the caller's `TS_OAUTH_ID`, `TS_AUDIENCE` and `TS_TAILNET` secrets. GitHub issues an identity token, which the check exchanges for a short-lived Tailscale access token. The federated identity needs `policy_file:read` and its required read-only device scopes. The check sends the original HuJSON policy and each grant or legacy ACL mutation to Tailscale's validate endpoint. It never applies a policy. A surviving mutation needs a reason in the caller's `.mutation-survivors.yml`.
 
 The caller must grant `id-token: write` in its workflow permissions so GitHub can issue the identity token.
+
+## Python mutation
+
+The Python workflow runs four jobs. `tests` runs the caller's tests with branch coverage, then the floor and changed-line checks. `plan` selects the functions the push changed and divides their mutants evenly into shards of at most 200. `mutate` runs one job for each shard, at most 10 at a time, and each shard adds its setup time and its speed to the run's summary. `checks` merges the shards' results and runs the survivors gate.
+
+Require the `checks` job in the caller's ruleset. It runs even after another job fails, and passes only when every job before it passed or was skipped for a reason it prints, because GitHub counts a skipped job as a pass.
+
+Mutation is skipped on a push to the default branch, because the branch's own push already ran it, when no Python function changed, and in a private repository. A newer push to the same branch cancels the older run, except on the default branch, where a newer run waits for the running one instead of cancelling it.
 
 ## Pinning a caller
 
@@ -54,7 +64,7 @@ jobs:
       caller_job: tests
 ```
 
-The example SHA is a placeholder. Replace it with a real commit SHA from this repository. Python local mutation needs the shared checks' `mutation` extra, which pins mutmut 3.8.0. A caller's local installation must preserve that version; installing a different mutmut version makes function selection fail. The shared check dependencies are pinned in `pyproject.toml` and its transitive dependency constraints are pinned in `requirements/ci-lock.txt`.
+The example SHA is a placeholder. Replace it with a real commit SHA from this repository. Python local mutation needs the shared checks' `mutation` extra, which pins mutmut 3.8.0. A caller's local installation must preserve that version; installing a different mutmut version makes function selection fail. The workflow's mutate job installs that extra before the caller's install command, so the install command must not install another mutmut version. The shared check dependencies are pinned in `pyproject.toml` and its transitive dependency constraints are pinned in `requirements/ci-lock.txt`.
 
 ## Mutation survivors
 
@@ -69,7 +79,7 @@ For StrykerJS, use the stable file, mutator, source location and replacement fin
 
 For a tailnet policy survivor, copy the `tailscale:` key printed by the policy check. The key uses the entry's content hash and mutation kind, so moving an entry keeps its reason valid and editing it requires a new reason.
 
-Every survivor in the selected scope must be listed. A mutmut entry is stale when its mutant is absent from the generated inventory or ran and did not survive. A Stryker entry outside the selected files is retained while its source file exists; entries for deleted files or mutants that ran and did not survive are stale. Blank reasons fail regardless of scope.
+Every survivor in the selected scope must be listed. A mutmut entry is stale when its mutant ran and did not survive, or when its mutant is missing from a file the run mutated or from a file that no longer exists. CI mutates only the changed files, so it keeps an entry for a file that exists but wasn't mutated, because the run can't judge it. A Stryker entry outside the selected files is retained while its source file exists; entries for deleted files or mutants that ran and did not survive are stale. Blank reasons fail regardless of scope.
 
 ## Mutation tool gaps
 
