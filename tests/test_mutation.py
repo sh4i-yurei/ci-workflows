@@ -714,6 +714,7 @@ def test_mutation_config_preserves_repository_project(tmp_path, monkeypatch):
     [
         ("already", "pyproject.toml already sets only_mutate"),
         ("no-table", "pyproject.toml has no [tool.mutmut] table"),
+        ("no-tool", "pyproject.toml has no [tool.mutmut] table"),
         ("missing", "source not found: sample/missing.py"),
         ("non-python", "only_mutate takes Python files: sample/notes.txt"),
     ],
@@ -726,6 +727,8 @@ def test_mutation_config_refuses_without_writing(tmp_path, monkeypatch, kind, ex
         config.write_text(config.read_text() + 'only_mutate = ["sample/other.py"]\n')
     elif kind == "no-table":
         config.write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+    elif kind == "no-tool":
+        config.write_text('[project]\nname = "x"\n')
     elif kind == "non-python":
         Path("sample/notes.txt").write_text("notes")
     source = {"missing": "sample/missing.py", "non-python": "sample/notes.txt"}.get(
@@ -1134,18 +1137,12 @@ def test_checks_requires_job_results(missing, capsys):
     assert f"the following arguments are required: {missing}" in capsys.readouterr().err
 
 
-def test_checks_rejects_unknown_result(capsys):
+@pytest.mark.parametrize("unknown", ["--tests", "--plan", "--mutate"])
+def test_checks_rejects_unknown_result(capsys, unknown):
+    args = ["mutation-checks"]
+    for option in ("--tests", "--plan", "--mutate"):
+        args.extend((option, "neutral" if option == unknown else "success"))
     with pytest.raises(SystemExit) as error:
-        main(
-            [
-                "mutation-checks",
-                "--tests",
-                "neutral",
-                "--plan",
-                "success",
-                "--mutate",
-                "success",
-            ]
-        )
+        main(args)
     assert error.value.code == 2
-    assert "argument --tests: invalid choice: 'neutral'" in capsys.readouterr().err
+    assert f"argument {unknown}: invalid choice: 'neutral'" in capsys.readouterr().err
