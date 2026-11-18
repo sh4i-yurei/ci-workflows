@@ -21,6 +21,8 @@ from unidiff import PatchSet
 
 from ci_workflows.errors import ConfigurationError
 from ci_workflows.mutation import (
+    checks_verdict as mutation_checks_verdict,
+    configure as mutation_configure,
     load_mutmut,
     merge as mutation_merge,
     plan as mutation_plan,
@@ -682,6 +684,21 @@ def main(argv: list[str] | None = None) -> int:
     merge_parser = commands.add_parser("mutation-merge")
     merge_parser.add_argument("--into", required=True)
     merge_parser.add_argument("--shard", action="append", required=True)
+    config_parser = commands.add_parser("mutation-config")
+    config_parser.add_argument("--config", type=Path, required=True)
+    config_parser.add_argument("--source", action="append", required=True)
+    checks_parser = commands.add_parser("mutation-checks")
+    job_results = ["success", "failure", "cancelled", "skipped"]
+    checks_parser.add_argument("--tests", choices=job_results, required=True)
+    checks_parser.add_argument("--plan", choices=job_results, required=True)
+    checks_parser.add_argument("--mutate", choices=job_results, required=True)
+    skip = checks_parser.add_mutually_exclusive_group()
+    skip.add_argument("--private", action="store_true")
+    skip.add_argument("--skipped")
+    checks_parser.add_argument("--plan-file", type=Path)
+    checks_parser.add_argument("--shards", type=Path)
+    checks_parser.add_argument("--survivors-file", type=Path)
+    checks_parser.add_argument("--source-config", type=Path)
     survivors = commands.add_parser("survivors")
     survivors.add_argument("--format", choices=["mutmut", "stryker"], required=True)
     survivors.add_argument("--results", type=Path, required=True)
@@ -718,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
             "source-paths",
             "mutation-plan",
             "mutation-merge",
+            "mutation-config",
         }
         else sys.stdout
     )
@@ -735,6 +753,41 @@ def main(argv: list[str] | None = None) -> int:
                 mutation_merge(Path(args.into), [Path(shard) for shard in args.shard])
             )
             return 0
+        elif args.command == "mutation-config":
+            print(mutation_configure(args.config, args.source))
+            return 0
+        elif args.command == "mutation-checks":
+            verdict = mutation_checks_verdict(
+                args.tests,
+                args.plan,
+                args.mutate,
+                args.private,
+                args.skipped,
+                args.plan_file,
+                args.shards,
+                args.survivors_file,
+                args.source_config,
+            )
+            if isinstance(verdict, tuple):
+                code, message = verdict
+            else:
+                with tempfile.TemporaryDirectory() as temporary:
+                    merged = Path(temporary) / "merged"
+                    message = mutation_merge(
+                        merged,
+                        [
+                            args.shards / str(index)
+                            for index in range(len(verdict["shards"]))
+                        ],
+                    )
+                    code, survivors_message = survivor_check(
+                        merged,
+                        args.survivors_file,
+                        "mutmut",
+                        verdict["functions"],
+                        source_config=args.source_config,
+                    )
+                    message += "\n" + survivors_message
         elif args.command == "changed-lines":
             code, message = changed_lines(
                 args.report,
