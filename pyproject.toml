@@ -13,7 +13,7 @@ ci-checks = "ci_workflows.checks:main"
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1", "pytest-cov==7.1.0"]
-mutation = ["mutmut==3.8.0"]
+mutation = ["mutmut==3.8.0", "tomlkit==0.15.2"]
 
 [tool.mutmut]
 source_paths = ["ci_workflows"]

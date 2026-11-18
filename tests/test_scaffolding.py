@@ -151,8 +151,8 @@ def test_architecture_documents_local_mutation_and_push_only_ci():
 def test_architecture_assigns_mutation_ownership():
     architecture = (ROOT / "ARCHITECTURE.md").read_text()
     rows = [line for line in architecture.splitlines() if line.startswith("| `")]
-    checks = "| `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`; it also parses `mutation-plan` and `mutation-merge` and hands them to `mutation.py`. | Grow another kind of check; a new kind gets its own module, as `rules.py`, `tailnet.py` and `mutation.py` did |"
-    mutation = "| `ci_workflows/mutation.py` | Loading mutmut 3.8.0 for every command that needs it, listing a file's mutant names, planning a run's shards (`mutation-plan`) and merging shards' results (`mutation-merge`). | Judge survivors; the survivors gate in `checks.py` does |"
+    checks = "| `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`; it also parses `mutation-plan`, `mutation-merge`, `mutation-config` and `mutation-checks`, hands them to `mutation.py`, and runs the survivors gate on the results `mutation-checks` merges. | Grow another kind of check; a new kind gets its own module, as `rules.py`, `tailnet.py` and `mutation.py` did |"
+    mutation = "| `ci_workflows/mutation.py` | Loading mutmut 3.8.0 for every command that needs it, listing a file's mutant names, planning a run's shards (`mutation-plan`), merging shards' results (`mutation-merge`), writing `only_mutate` (`mutation-config`), and judging the merging job's needed jobs before its survivors are checked (`mutation-checks`). | Judge survivors; the survivors gate in `checks.py` does |"
     assert rows[rows.index(checks) + 1] == mutation
 
 
@@ -244,7 +244,10 @@ def test_python_workflow_reports_real_cli_failures(
 
 def test_python_workflow_installs_verified_mutmut_version():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert project["project"]["optional-dependencies"]["mutation"] == ["mutmut==3.8.0"]
+    assert project["project"]["optional-dependencies"]["mutation"] == [
+        "mutmut==3.8.0",
+        "tomlkit==0.15.2",
+    ]
     install = next(
         step["run"]
         for step in workflow("python.yml")["jobs"]["checks"]["steps"]

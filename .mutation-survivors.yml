@@ -86,10 +86,10 @@
 - mutant: ci_workflows.checks.x_select_functions__mutmut_21
   reason: The initial generated set is overwritten in mutmut mode and never read in
     ordinary function-selection mode.
-- mutant: ci_workflows.checks.x_main__mutmut_514
+- mutant: ci_workflows.checks.x_main__mutmut_680
   reason: When TS_ACCESS_TOKEN is absent, None and the empty string are both falsey
     and both select federated token retrieval.
-- mutant: ci_workflows.checks.x_main__mutmut_516
+- mutant: ci_workflows.checks.x_main__mutmut_682
   reason: When TS_ACCESS_TOKEN is absent, the omitted get default and the empty string
     are both falsey and both select federated token retrieval.
 - mutant: ci_workflows.checks.x_select_functions__mutmut_74
@@ -125,9 +125,13 @@
 - mutant: ci_workflows.mutation.x_load_mutmut__mutmut_3
   reason: Python package metadata lookup canonicalizes distribution names;
     version("MUTMUT") and version("mutmut") return the same installed version.
-- mutant: ci_workflows.mutation.x_plan__mutmut_48
+- mutant: ci_workflows.mutation.x_plan__mutmut_51
   reason: With no shards the loop never runs, so the unused base and extra values
     change nothing.
-- mutant: ci_workflows.mutation.x_plan__mutmut_49
+- mutant: ci_workflows.mutation.x_plan__mutmut_52
   reason: With no shards the loop never runs, so the unused base and extra values
     change nothing.
+- mutant: ci_workflows.checks.x_main__mutmut_558
+  reason: The merged subfolder lives inside a temporary folder that is deleted afterwards, and no message names it, so its name changes nothing a caller can see.
+- mutant: ci_workflows.checks.x_main__mutmut_559
+  reason: The merged subfolder lives inside a temporary folder that is deleted afterwards, and no message names it, so its name changes nothing a caller can see.
