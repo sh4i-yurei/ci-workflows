@@ -646,6 +646,7 @@ def test_mutmut_test_selection():
         "tests/test_rules.py",
         "tests/test_tailnet_mutation.py",
         "tests/test_mutation.py",
+        "tests/test_rehearsal.py",
     ]
 
 

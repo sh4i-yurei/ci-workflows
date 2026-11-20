@@ -1,0 +1,1309 @@
+# Runs the repository checks on every pull request and on every push to main.
+# The job names are what the ruleset on main requires by name, so renaming a job means
+# updating the ruleset in the same change.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      b2_bucket: ${{ steps.select.outputs.b2_bucket }}
+      b2_copy: ${{ steps.select.outputs.b2_copy }}
+      backup_prune: ${{ steps.select.outputs.backup_prune }}
+      backup_server: ${{ steps.select.outputs.backup_server }}
+      baseline_container_account: ${{ steps.select.outputs.baseline_container_account }}
+      break_glass_sheet: ${{ steps.select.outputs.break_glass_sheet }}
+      hub_backup_disk: ${{ steps.select.outputs.hub_backup_disk }}
+      hub_pull: ${{ steps.select.outputs.hub_pull }}
+      openbao: ${{ steps.select.outputs.openbao }}
+      openbao_backup: ${{ steps.select.outputs.openbao_backup }}
+      openbao_client: ${{ steps.select.outputs.openbao_client }}
+      openbao_config: ${{ steps.select.outputs.openbao_config }}
+      staging: ${{ steps.select.outputs.staging }}
+      ticket_band: ${{ steps.select.outputs.ticket_band }}
+      vaultwarden_backup: ${{ steps.select.outputs.vaultwarden_backup }}
+      web: ${{ steps.select.outputs.web }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install PyYAML==6.0.3
+      - id: select
+        run: python ci/select_jobs.py "$EVENT_NAME" "$EVENT_REF"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+
+  backup-prune:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.backup_prune == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs
+      - name: Seed system manager XDG setting for restoration checks
+        run: sudo systemctl set-environment "XDG_RUNTIME_DIR=/run/user/$(id -u)"
+      - name: Refuse existing backup prune test resources
+        shell: bash
+        run: |
+          sudo useradd -m bptest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_prune/run.sh > /tmp/backup-prune-existing-account.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted bptest'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bptest already exists' /tmp/backup-prune-existing-account.log
+          id bptest
+          test -d /home/bptest
+          sudo userdel -r bptest
+          sudo touch /etc/systemd/system/backup-prune@.timer
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_prune/run.sh > /tmp/backup-prune-existing-unit.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted unit'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: backup prune units already exist' /tmp/backup-prune-existing-unit.log
+          test -e /etc/systemd/system/backup-prune@.timer
+          ! id bptest
+          sudo rm /etc/systemd/system/backup-prune@.timer
+          sudo cp -p /etc/hosts /tmp/backup-prune-hosts
+          printf '127.0.0.1 s3.us-east-1.seaweedfs.test\n' | sudo tee -a /etc/hosts
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_prune/run.sh > /tmp/backup-prune-existing-host.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted hosts entry'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: s3.us-east-1.seaweedfs.test is already in /etc/hosts' /tmp/backup-prune-existing-host.log
+          sudo cp -p /tmp/backup-prune-hosts /etc/hosts
+          sudo cmp /tmp/backup-prune-hosts /etc/hosts
+          printf 'planted\n' | sudo tee /usr/local/libexec/backup-success
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_prune/run.sh > /tmp/backup-prune-existing-writer.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted writer'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /usr/local/libexec/backup-success already exists' /tmp/backup-prune-existing-writer.log
+          test "$(cat /usr/local/libexec/backup-success)" = planted
+          if id bptest; then echo 'ASSERTION FAILED: bptest survived writer refusal'; exit 1; fi
+          sudo rm /usr/local/libexec/backup-success
+      - name: Backup prune role integration cases and cleanup
+        shell: bash
+        run: |
+          hosts_before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          environment_before=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          manager_before=$(systemctl show-environment)
+          sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_prune/run.sh | tee driver.log
+          grep -Fx 'backup-prune driver: all cases passed' driver.log
+          test "$(grep -c '^PASS ' driver.log)" -eq 11
+          for unit in backup-prune backup-check b2-copy; do
+            test -z "$(systemctl list-units --all --no-legend "$unit*")"
+          done
+          test ! -e /etc/systemd/system/backup-prune@.timer
+          test ! -e /etc/systemd/system/backup-check@.timer
+          test ! -e /etc/systemd/system/backup-prune@.service
+          test ! -e /etc/systemd/system/backup-check@.service
+          test ! -e /etc/systemd/system/b2-copy@.service
+          test ! -e /etc/systemd/system/b2-copy@.timer
+          test ! -e /usr/local/libexec/backup-success
+          ! id bptest
+          ! sudo losetup --list | grep -F backup.img
+          ! sudo podman container exists backup-prune-weed
+          test "$hosts_before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          test "$environment_before" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)"
+          test "$manager_before" = "$(systemctl show-environment)"
+          ! grep -E '^CLEANUP FAILED:' driver.log
+      - name: Failure after role cleans up all test resources
+        shell: bash
+        run: |
+          hosts_before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          environment_before=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          manager_before=$(systemctl show-environment)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_PRUNE_ROLE=1 bash tests/backup_prune/run.sh > /tmp/backup-prune-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted deliberate failure'; exit 1
+          fi
+          grep -F 'ASSERTION FAILED: deliberate failure after backup prune' /tmp/backup-prune-failure.log || { tail -35 /tmp/backup-prune-failure.log; exit 1; }
+          grep -F 'Deliberate failure after backup prune' /tmp/backup-prune-failure.log || { tail -35 /tmp/backup-prune-failure.log; exit 1; }
+          python3 - /tmp/backup-prune-failure.log <<'PY'
+          import pathlib, sys
+          lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+          first = lines.index('PASS first play installs timers and leaves snapshots unchanged')
+          failure = next(i for i, line in enumerate(lines) if 'Deliberate failure after backup prune' in line)
+          assert first < failure
+          PY
+          ! grep -E '^CLEANUP FAILED:' /tmp/backup-prune-failure.log
+          test ! -e /etc/systemd/system/backup-prune@.timer
+          test ! -e /etc/systemd/system/backup-check@.timer
+          test ! -e /etc/systemd/system/backup-prune@.service
+          test ! -e /etc/systemd/system/backup-check@.service
+          test ! -e /etc/systemd/system/b2-copy@.service
+          test ! -e /etc/systemd/system/b2-copy@.timer
+          test ! -e /usr/local/libexec/backup-success
+          test -z "$(systemctl list-units --all --no-legend 'backup-*')"
+          test -z "$(systemctl list-units --all --no-legend 'b2-copy*')"
+          ! id bptest
+          ! sudo losetup --list | grep -F backup.img
+          ! sudo podman container exists backup-prune-weed
+          test "$hosts_before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          test "$environment_before" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)"
+          test "$manager_before" = "$(systemctl show-environment)"
+
+  break-glass-sheet:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.break_glass_sheet == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs skopeo attr
+      - name: Check shared inventory values and pinned restic tag
+        run: |
+          ansible-inventory --host hub | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["b2_api_url"] == "https://api.backblazeb2.com/b2api/v4/"; assert data["restic_image_tag"] == "docker.io/restic/restic:0.19.1"'
+          if grep -r b2_api_url roles/*/defaults; then
+            echo 'ASSERTION FAILED: b2_api_url remains in role defaults'; exit 1
+          fi
+          skopeo inspect docker://docker.io/restic/restic:0.19.1 | python3 -c 'import json,sys,yaml; digest=json.load(sys.stdin)["Digest"]; pinned=yaml.safe_load(open("group_vars/all.yml"))["restic_image"].split("@",1)[1]; assert digest == pinned, (digest,pinned)'
+      - name: Existing container survives driver refusal
+        run: |
+          sudo podman run -d --name b2glass-weed --network host docker.io/chrislusf/seaweedfs@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59 mini
+          before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/break_glass_sheet/run.sh > container-refusal.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted existing container'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: b2glass-weed container already exists' container-refusal.log
+          sudo podman container exists b2glass-weed
+          test "$before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          sudo podman rm -f b2glass-weed
+      - name: Existing hosts entry survives driver refusal
+        run: |
+          sudo cp -p /etc/hosts hosts-before
+          printf '127.0.0.1 s3.us-east-1.seaweedfs.test\n' | sudo tee -a /etc/hosts
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/break_glass_sheet/run.sh > hosts-refusal.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted existing hosts entry'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: s3.us-east-1.seaweedfs.test is already in /etc/hosts' hosts-refusal.log
+          grep -Fx '127.0.0.1 s3.us-east-1.seaweedfs.test' /etc/hosts
+          sudo cp -p hosts-before /etc/hosts
+          sudo cmp hosts-before /etc/hosts
+      - name: Break-glass role integration cases and cleanup
+        shell: bash
+        run: |
+          before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/break_glass_sheet/run.sh | tee driver.log
+          grep -Fx 'break-glass-sheet driver: all cases passed' driver.log
+          test "$(grep -c '^PASS ' driver.log)" -eq 9
+          if sudo podman container exists b2glass-weed; then
+            echo 'ASSERTION FAILED: b2glass-weed survived cleanup'; exit 1
+          fi
+          if sudo find /tmp -maxdepth 1 -name 'ansible.*break-glass-sheet' | grep -q .; then
+            echo 'ASSERTION FAILED: break-glass proof folder survived cleanup'; exit 1
+          fi
+          test "$before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          ! grep -E '^CLEANUP FAILED:' driver.log
+
+  b2-copy:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.b2_copy == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs
+      - name: Seed system manager XDG setting for restoration checks
+        run: sudo systemctl set-environment "XDG_RUNTIME_DIR=/run/user/$(id -u)"
+      - name: Refuse existing B2 copy test resources
+        run: |
+          sudo useradd -m bstest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_copy/run.sh > /tmp/b2-copy-existing-account.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted bstest'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bstest already exists' /tmp/b2-copy-existing-account.log
+          id bstest
+          test -d /home/bstest
+          sudo userdel -r bstest
+          sudo touch /etc/systemd/system/b2-copy@.timer
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_copy/run.sh > /tmp/b2-copy-existing-unit.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted unit'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: b2-copy units already exist' /tmp/b2-copy-existing-unit.log
+          test -e /etc/systemd/system/b2-copy@.timer
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived unit refusal'; exit 1; fi
+          sudo rm /etc/systemd/system/b2-copy@.timer
+          sudo cp -p /etc/hosts /tmp/b2-copy-hosts
+          printf '127.0.0.1 s3.us-east-1.seaweedfs.test\n' | sudo tee -a /etc/hosts
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_copy/run.sh > /tmp/b2-copy-existing-host.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted hosts entry'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: s3.us-east-1.seaweedfs.test is already in /etc/hosts' /tmp/b2-copy-existing-host.log
+          grep -Fx '127.0.0.1 s3.us-east-1.seaweedfs.test' /etc/hosts
+          sudo cp -p /tmp/b2-copy-hosts /etc/hosts
+          sudo cmp /tmp/b2-copy-hosts /etc/hosts
+          printf 'planted\n' | sudo tee /usr/local/libexec/backup-success
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_copy/run.sh > /tmp/b2-copy-existing-writer.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted writer'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /usr/local/libexec/backup-success already exists' /tmp/b2-copy-existing-writer.log
+          test "$(cat /usr/local/libexec/backup-success)" = planted
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived writer refusal'; exit 1; fi
+          sudo rm /usr/local/libexec/backup-success
+      - name: Failure after role cleans up all test resources
+        run: |
+          hosts_before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          environment_before=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          manager_before=$(systemctl show-environment)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_COPY_ROLE=1 bash tests/b2_copy/run.sh > /tmp/b2-copy-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted deliberate failure'; exit 1
+          fi
+          grep -F 'ASSERTION FAILED: b2_copy role play must pass' /tmp/b2-copy-failure.log || { tail -35 /tmp/b2-copy-failure.log; exit 1; }
+          grep -F 'Deliberate failure after B2 copy' /tmp/b2-copy-failure.log || { tail -35 /tmp/b2-copy-failure.log; exit 1; }
+          python3 - /tmp/b2-copy-failure.log <<'PY'
+          import pathlib, sys
+          lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+          first = lines.index('PASS first role run copies snapshot and starts timer')
+          failure = next(i for i, line in enumerate(lines) if 'Deliberate failure after B2 copy' in line)
+          assert first < failure, 'deliberate failure must follow the first real role run'
+          PY
+          if grep -E '^CLEANUP FAILED:' /tmp/b2-copy-failure.log; then echo 'ASSERTION FAILED: B2 copy cleanup failed'; exit 1; fi
+          test ! -e /etc/systemd/system/b2-copy@.timer
+          test ! -e /etc/systemd/system/b2-copy@.service
+          test ! -e /usr/local/libexec/backup-success
+          test ! -e /run/systemd/system/b2-copy@testhost.service.d
+          test -z "$(systemctl list-units --all --no-legend 'b2-copy*')"
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived cleanup'; exit 1; fi
+          if sudo losetup --list | grep -F backup.img; then echo 'ASSERTION FAILED: loop device survived cleanup'; exit 1; fi
+          if sudo podman container exists b2-copy-weed; then echo 'ASSERTION FAILED: SeaweedFS container survived cleanup'; exit 1; fi
+          test "$hosts_before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          test "$environment_before" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)"
+          test "$manager_before" = "$(systemctl show-environment)"
+      - name: B2 copy role integration cases and cleanup
+        run: |
+          hosts_before=$(sudo sha256sum /etc/hosts | cut -d' ' -f1)
+          environment_before=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          manager_before=$(systemctl show-environment)
+          sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_copy/run.sh
+          test ! -e /etc/systemd/system/b2-copy@.timer
+          test ! -e /etc/systemd/system/b2-copy@.service
+          test ! -e /usr/local/libexec/backup-success
+          test ! -e /run/systemd/system/b2-copy@testhost.service.d
+          test -z "$(systemctl list-units --all --no-legend 'b2-copy*')"
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived cleanup'; exit 1; fi
+          if sudo losetup --list | grep -F backup.img; then echo 'ASSERTION FAILED: loop device survived cleanup'; exit 1; fi
+          if sudo podman container exists b2-copy-weed; then echo 'ASSERTION FAILED: SeaweedFS container survived cleanup'; exit 1; fi
+          test "$hosts_before" = "$(sudo sha256sum /etc/hosts | cut -d' ' -f1)"
+          test "$environment_before" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)"
+          test "$manager_before" = "$(systemctl show-environment)"
+
+  vaultwarden-backup:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.vaultwarden_backup == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs
+      - name: Seed system manager XDG setting for restoration checks
+        run: sudo systemctl set-environment "XDG_RUNTIME_DIR=/run/user/$(id -u)"
+      - name: Existing Vaultwarden test accounts survive driver refusal
+        run: |
+          for account in bstest vwtest; do
+            sudo useradd -m "$account"
+            if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/vaultwarden_backup/run.sh > "/tmp/$account-existing.log" 2>&1; then
+              echo "Vaultwarden driver accepted existing $account"
+              exit 1
+            fi
+            grep -Fx "ASSERTION FAILED: $account already exists" "/tmp/$account-existing.log" || { echo "ASSERTION FAILED: $account refusal message missing"; exit 1; }
+            id "$account" || { echo "ASSERTION FAILED: $account account removed"; exit 1; }
+            test -d "/home/$account" || { echo "ASSERTION FAILED: $account home removed"; exit 1; }
+            sudo userdel -r "$account"
+          done
+          for unit in vaultwarden-backup.timer vaultwarden-backup.service; do
+            sudo touch "/etc/systemd/system/$unit"
+            if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/vaultwarden_backup/run.sh > "/tmp/$unit-existing.log" 2>&1; then
+              echo "ASSERTION FAILED: Vaultwarden driver accepted existing $unit"; exit 1
+            fi
+            grep -Fx 'ASSERTION FAILED: vaultwarden-backup units already exist' "/tmp/$unit-existing.log" || { echo "ASSERTION FAILED: $unit refusal message missing"; exit 1; }
+            test -e "/etc/systemd/system/$unit" || { echo "ASSERTION FAILED: $unit was removed"; exit 1; }
+            if id bstest || id vwtest; then echo "ASSERTION FAILED: $unit refusal created an account"; exit 1; fi
+            sudo rm "/etc/systemd/system/$unit"
+          done
+          echo keep | sudo tee /usr/local/libexec/backup-success >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/vaultwarden_backup/run.sh > /tmp/vw-existing-writer.log 2>&1; then
+            echo 'ASSERTION FAILED: Vaultwarden driver accepted an existing backup success writer'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: the backup success writer already exists' /tmp/vw-existing-writer.log || { echo 'ASSERTION FAILED: backup success writer refusal message missing'; exit 1; }
+          test "$(sudo cat /usr/local/libexec/backup-success)" = keep || { echo 'ASSERTION FAILED: the existing backup success writer changed'; exit 1; }
+          if id bstest || id vwtest; then echo 'ASSERTION FAILED: backup success writer refusal created an account'; exit 1; fi
+          sudo rm /usr/local/libexec/backup-success
+      - name: Backup server failure leaves no driver state
+        run: |
+          before_file=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          before_manager=$(systemctl show-environment)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_BACKUP_SERVER=1 bash tests/vaultwarden_backup/run.sh > /tmp/vw-server-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: backup server failure was accepted'; exit 1
+          fi
+          grep -F 'ASSERTION FAILED: backup server role must pass' /tmp/vw-server-failure.log || { tail -30 /tmp/vw-server-failure.log; exit 1; }
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived cleanup'; exit 1; fi
+          test ! -e /home/bstest || { echo 'ASSERTION FAILED: bstest home survived cleanup'; exit 1; }
+          test ! -e /var/lib/systemd/linger/bstest || { echo 'ASSERTION FAILED: bstest lingering survived cleanup'; exit 1; }
+          if sudo losetup --list | grep -F 'backup.img'; then echo 'ASSERTION FAILED: loop device survived cleanup'; exit 1; fi
+          test ! -e /usr/local/libexec/backup-success || { echo 'ASSERTION FAILED: backup success writer survived cleanup'; exit 1; }
+          test "$before_file" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)" || { echo 'ASSERTION FAILED: /etc/environment changed'; exit 1; }
+          test "$before_manager" = "$(systemctl show-environment)" || { echo 'ASSERTION FAILED: system manager environment changed'; exit 1; }
+      - name: Busy mount reports cleanup failure and restores environment
+        run: |
+          before_file=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          before_manager=$(systemctl show-environment)
+          sudo bash -c 'for ((n=0; n<600; n++)); do point=$(findmnt -rn -t xfs -o TARGET | grep -E "/tmp/tmp[^/]*/backup$" | head -1); if [[ -n $point ]]; then cd "$point"; printf "%s\n" "$point" > /tmp/vw-held-mount; echo "$BASHPID" > /tmp/vw-held-mount.pid; exec sleep 600; fi; sleep 0.1; done' &
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_BACKUP_SERVER=1 bash tests/vaultwarden_backup/run.sh > /tmp/vw-busy-mount.log 2>&1; then
+            echo 'ASSERTION FAILED: busy mount run was accepted'; exit 1
+          fi
+          test -s /tmp/vw-held-mount || { echo 'ASSERTION FAILED: mount holder never entered mount'; tail -30 /tmp/vw-busy-mount.log; exit 1; }
+          test "$(sudo readlink "/proc/$(cat /tmp/vw-held-mount.pid)/cwd")" = "$(cat /tmp/vw-held-mount)" || { echo 'ASSERTION FAILED: mount holder left mount before driver exit'; exit 1; }
+          grep -E '^CLEANUP FAILED:.*unmount' /tmp/vw-busy-mount.log || { tail -30 /tmp/vw-busy-mount.log; exit 1; }
+          if id bstest; then echo 'ASSERTION FAILED: bstest survived busy mount cleanup'; exit 1; fi
+          test "$before_file" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)" || { echo 'ASSERTION FAILED: /etc/environment changed'; exit 1; }
+          test "$before_manager" = "$(systemctl show-environment)" || { echo 'ASSERTION FAILED: system manager environment changed'; exit 1; }
+          sudo kill "$(cat /tmp/vw-held-mount.pid)"
+          sudo umount "$(cat /tmp/vw-held-mount)"
+      - name: Failed image pull removes Vaultwarden system units
+        run: |
+          before_file=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          before_manager=$(systemctl show-environment)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AT_IMAGE_PULL=1 bash tests/vaultwarden_backup/run.sh > /tmp/vw-image-pull-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: failed image pull was accepted'; exit 1
+          fi
+          grep -F 'TASK [vaultwarden_backup : Vaultwarden backup | Pull the pinned restic image]' /tmp/vw-image-pull-failure.log || { echo 'ASSERTION FAILED: image pull task was not reached'; tail -30 /tmp/vw-image-pull-failure.log; exit 1; }
+          grep -F 'ASSERTION FAILED: Vaultwarden backup role play must pass' /tmp/vw-image-pull-failure.log || { echo 'ASSERTION FAILED: image pull failure was not reported'; tail -30 /tmp/vw-image-pull-failure.log; exit 1; }
+          if grep -E '^CLEANUP FAILED:' /tmp/vw-image-pull-failure.log; then echo 'ASSERTION FAILED: image pull cleanup failed'; exit 1; fi
+          test ! -e /etc/systemd/system/vaultwarden-backup.timer || { echo 'ASSERTION FAILED: Vaultwarden timer file survived image pull cleanup'; exit 1; }
+          test ! -e /etc/systemd/system/vaultwarden-backup.service || { echo 'ASSERTION FAILED: Vaultwarden service file survived image pull cleanup'; exit 1; }
+          test -z "$(systemctl list-units --all --no-legend 'vaultwarden-backup*')" || { echo 'ASSERTION FAILED: Vaultwarden units remain loaded after image pull failure'; exit 1; }
+          if id vwtest || id bstest; then echo 'ASSERTION FAILED: test account survived image pull cleanup'; exit 1; fi
+          test ! -e /usr/local/libexec/backup-success || { echo 'ASSERTION FAILED: backup success writer survived image pull cleanup'; exit 1; }
+          test "$before_file" = "$(sudo sha256sum /etc/environment | cut -d' ' -f1)" || { echo 'ASSERTION FAILED: /etc/environment changed'; exit 1; }
+          test "$before_manager" = "$(systemctl show-environment)" || { echo 'ASSERTION FAILED: system manager environment changed'; exit 1; }
+      - name: Vaultwarden driver restores the runner environment
+        run: |
+          before_file=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          before_manager=$(systemctl show-environment)
+          echo "$before_manager" | grep -E '^XDG_RUNTIME_DIR=' || { echo 'ASSERTION FAILED: system manager lacks XDG_RUNTIME_DIR'; exit 1; }
+          sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/vaultwarden_backup/run.sh
+          after_file=$(sudo sha256sum /etc/environment | cut -d' ' -f1)
+          after_manager=$(systemctl show-environment)
+          test "$before_file" = "$after_file" || { echo 'ASSERTION FAILED: /etc/environment changed'; exit 1; }
+          test "$before_manager" = "$after_manager" || { echo 'ASSERTION FAILED: system manager environment changed'; exit 1; }
+          test ! -e /etc/systemd/system/vaultwarden-backup.timer || { echo 'ASSERTION FAILED: Vaultwarden timer file survived cleanup'; exit 1; }
+          test ! -e /etc/systemd/system/vaultwarden-backup.service || { echo 'ASSERTION FAILED: Vaultwarden service file survived cleanup'; exit 1; }
+          test -z "$(systemctl list-units --all --no-legend 'vaultwarden-backup*')" || { echo 'ASSERTION FAILED: Vaultwarden units remain loaded'; exit 1; }
+          test ! -e /usr/local/libexec/backup-success || { echo 'ASSERTION FAILED: backup success writer survived cleanup'; exit 1; }
+          test ! -e /etc/systemd/system/vaultwarden-backup.service.d || { echo 'ASSERTION FAILED: Vaultwarden service drop-in folder survived cleanup'; exit 1; }
+
+  b2-bucket:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.b2_bucket == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs
+      - name: Existing B2 test account survives driver refusal
+        run: |
+          sudo useradd -m b2test
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_bucket/run.sh > /tmp/b2-existing-account.log 2>&1; then
+            echo 'B2 driver accepted an existing account'
+            exit 1
+          fi
+          grep -F 'b2test already exists' /tmp/b2-existing-account.log
+          id b2test
+          test -d /home/b2test
+          sudo userdel -r b2test
+      - run: sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/b2_bucket/run.sh
+
+  baseline-container-account:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.baseline_container_account == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y libpam-systemd dbus-user-session
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m bltest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/baseline_container_account/run.sh > /tmp/baseline-container-account-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bltest already exists' /tmp/baseline-container-account-existing.log
+          test -d /home/bltest
+          id bltest
+          sudo userdel -r bltest
+      - name: Baseline container account integration cases
+        run: |
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/baseline_container_account/run.sh > /tmp/baseline-container-account-full.log 2>&1; then
+            cat /tmp/baseline-container-account-full.log
+          else
+            tail -80 /tmp/baseline-container-account-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/baseline-container-account-full.log)" != 'baseline_container_account driver: all cases passed'; then
+            echo 'ASSERTION FAILED: baseline container account driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          if id bltest >/dev/null 2>&1; then echo 'ASSERTION FAILED: full driver left bltest'; exit 1; fi
+          if test -e /home/bltest; then echo 'ASSERTION FAILED: full driver left home'; exit 1; fi
+          if test -e /var/lib/systemd/linger/bltest; then echo 'ASSERTION FAILED: full driver left lingering'; exit 1; fi
+
+  backup-server:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.backup_server == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils xfsprogs
+      - run: sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/backup_server/run.sh
+
+  openbao:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.openbao == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m baotest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao/run.sh > /tmp/openbao-account.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: baotest already exists' /tmp/openbao-account.log
+          test -d /home/baotest
+          id baotest
+          sudo userdel -r baotest
+      - name: Occupied port is preserved
+        run: |
+          python3 -m http.server 8200 --bind 127.0.0.1 > /tmp/openbao-listener.log 2>&1 &
+          listener=$!
+          trap 'kill "$listener"' EXIT
+          sleep 1
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao/run.sh > /tmp/openbao-port.log 2>&1; then
+            echo 'ASSERTION FAILED: occupied port was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: 127.0.0.1:8200 is already in use' /tmp/openbao-port.log
+          curl -fsS http://127.0.0.1:8200/ > /dev/null
+          if id baotest >/dev/null 2>&1; then echo 'ASSERTION FAILED: occupied-port test created baotest'; exit 1; fi
+      - name: Deliberate role failure cleans up
+        run: |
+          sudo cp -p /etc/environment /tmp/openbao-environment-before
+          sudo systemctl show-environment > /tmp/openbao-manager-before
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_OPENBAO_ROLE=1 bash tests/openbao/run.sh > /tmp/openbao-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: deliberate driver failure passed'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: deliberate failure after the openbao role' /tmp/openbao-failure.log || {
+            tail -60 /tmp/openbao-failure.log
+            grep -Fx 'OpenBao unit status:' /tmp/openbao-failure.log || { echo 'ASSERTION FAILED: role failure omitted unit status'; exit 1; }
+            grep -Fx 'OpenBao user journal:' /tmp/openbao-failure.log || { echo 'ASSERTION FAILED: role failure omitted user journal'; exit 1; }
+            tail -60 /tmp/openbao-failure.log
+            echo 'ASSERTION FAILED: deliberate failure point was not reached'
+            exit 1
+          }
+          if grep -q '^CLEANUP FAILED:' /tmp/openbao-failure.log; then echo 'ASSERTION FAILED: driver cleanup failed'; exit 1; fi
+          if id baotest >/dev/null 2>&1; then echo 'ASSERTION FAILED: cleanup left baotest'; exit 1; fi
+          if test -e /home/baotest; then echo 'ASSERTION FAILED: cleanup left home'; exit 1; fi
+          if test -e /var/lib/systemd/linger/baotest; then echo 'ASSERTION FAILED: cleanup left lingering'; exit 1; fi
+          if test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8200/ || true)" != 000; then echo 'ASSERTION FAILED: cleanup left listener'; exit 1; fi
+          sudo cmp /tmp/openbao-environment-before /etc/environment
+          sudo systemctl show-environment | cmp /tmp/openbao-manager-before -
+      - name: OpenBao role integration cases
+        run: |
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao/run.sh > /tmp/openbao-full.log 2>&1; then
+            cat /tmp/openbao-full.log
+          else
+            tail -80 /tmp/openbao-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/openbao-full.log)" != 'openbao driver: all cases passed'; then
+            echo 'ASSERTION FAILED: OpenBao driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          if id baotest >/dev/null 2>&1; then echo 'ASSERTION FAILED: full driver left baotest'; exit 1; fi
+          if test -e /home/baotest; then echo 'ASSERTION FAILED: full driver left home'; exit 1; fi
+          if test -e /var/lib/systemd/linger/baotest; then echo 'ASSERTION FAILED: full driver left lingering'; exit 1; fi
+          if test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8200/ || true)" != 000; then echo 'ASSERTION FAILED: full driver left listener'; exit 1; fi
+          sudo cmp /tmp/openbao-environment-before /etc/environment
+          sudo systemctl show-environment | cmp /tmp/openbao-manager-before -
+
+  openbao-client:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.openbao_client == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt python3-apt
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m bltest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bltest already exists' /tmp/openbao-client-existing.log
+          test -d /home/bltest
+          id bltest
+          sudo userdel -r bltest
+      - name: Existing blother, helper and configuration folder are preserved
+        run: |
+          sudo useradd -m blother
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-blother.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing blother account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: blother already exists' /tmp/openbao-client-existing-blother.log
+          test -d /home/blother
+          id blother
+          sudo userdel -r blother
+          printf 'existing helper\n' | sudo tee /usr/local/bin/openbao-read > /dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-helper.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing helper was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /usr/local/bin/openbao-read already exists' /tmp/openbao-client-existing-helper.log
+          test "$(cat /usr/local/bin/openbao-read)" = 'existing helper'
+          sudo rm /usr/local/bin/openbao-read
+          printf 'existing driver program\n' | sudo tee /usr/local/bin/openbao-podman-secret > /dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-program.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing driver program was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /usr/local/bin/openbao-podman-secret already exists' /tmp/openbao-client-existing-program.log
+          test "$(cat /usr/local/bin/openbao-podman-secret)" = 'existing driver program'
+          sudo rm /usr/local/bin/openbao-podman-secret
+          sudo mkdir /etc/openbao
+          printf 'existing config\n' | sudo tee /etc/openbao/keep > /dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-folder.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing /etc/openbao was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /etc/openbao already exists' /tmp/openbao-client-existing-folder.log
+          test "$(cat /etc/openbao/keep)" = 'existing config'
+          sudo rm -r /etc/openbao
+          if id bltest >/dev/null 2>&1; then echo 'ASSERTION FAILED: a refusal created bltest'; exit 1; fi
+      - name: Existing tbclient is preserved
+        run: |
+          sudo useradd -m tbclient
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-tbclient.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing tbclient account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: tbclient already exists' /tmp/openbao-client-existing-tbclient.log
+          test -d /home/tbclient
+          id tbclient
+          sudo userdel -r tbclient
+      - name: Existing digest configuration is preserved
+        run: |
+          printf 'existing digest file\n' | sudo tee /etc/ticket-digest.json > /dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-existing-digest.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing /etc/ticket-digest.json was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /etc/ticket-digest.json already exists' /tmp/openbao-client-existing-digest.log
+          test "$(cat /etc/ticket-digest.json)" = 'existing digest file'
+          if id tbclient >/dev/null 2>&1; then echo 'ASSERTION FAILED: a refusal created tbclient'; exit 1; fi
+          sudo rm /etc/ticket-digest.json
+      - name: openbao_client role integration cases
+        run: |
+          sudo cp -p /etc/environment /tmp/openbao-client-environment-before
+          sudo systemctl show-environment > /tmp/openbao-client-manager-before
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_client/run.sh > /tmp/openbao-client-full.log 2>&1; then
+            cat /tmp/openbao-client-full.log
+          else
+            tail -80 /tmp/openbao-client-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/openbao-client-full.log)" != 'openbao_client driver: all cases passed'; then
+            echo 'ASSERTION FAILED: openbao_client driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          for account in bltest blother tbclient; do
+            if id "$account" >/dev/null 2>&1; then echo "ASSERTION FAILED: full driver left $account"; exit 1; fi
+            if test -e "/home/$account"; then echo "ASSERTION FAILED: full driver left /home/$account"; exit 1; fi
+            if test -e "/var/lib/systemd/linger/$account"; then echo "ASSERTION FAILED: full driver left lingering for $account"; exit 1; fi
+          done
+          if test -e /usr/local/bin/openbao-read; then echo 'ASSERTION FAILED: full driver left /usr/local/bin/openbao-read'; exit 1; fi
+          if test -e /usr/local/bin/openbao-podman-secret; then echo 'ASSERTION FAILED: full driver left /usr/local/bin/openbao-podman-secret'; exit 1; fi
+          if test -e /etc/openbao; then echo 'ASSERTION FAILED: full driver left /etc/openbao'; exit 1; fi
+          for path in /usr/local/libexec/ticket-digest /etc/ticket-digest.json /etc/systemd/system/ticket-digest.service /etc/systemd/system/ticket-digest.timer /run/systemd/system/ticket-digest.service.d/driver-hold.conf /run/ticket-digest-driver-permit /var/lib/systemd/timers/stamp-ticket-digest.timer; do
+            if test -e "$path"; then echo "ASSERTION FAILED: full driver left $path"; exit 1; fi
+          done
+          for port in 8200 18300 18083 18400 18401; do
+            if test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/" || true)" != 000; then echo "ASSERTION FAILED: full driver left a listener on $port"; exit 1; fi
+          done
+          sudo cmp /tmp/openbao-client-environment-before /etc/environment
+          sudo systemctl show-environment | cmp /tmp/openbao-client-manager-before -
+
+  openbao-backup:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.openbao_backup == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt apache2-utils
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m bbtest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_backup/run.sh > /tmp/openbao-backup-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bbtest already exists' /tmp/openbao-backup-existing.log
+          test -d /home/bbtest
+          id bbtest
+          sudo userdel -r bbtest
+      - name: Existing backup success writer is preserved
+        run: |
+          printf 'planted' | sudo tee /usr/local/libexec/backup-success >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_backup/run.sh > /tmp/openbao-backup-existing-writer.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted an existing backup success writer'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /usr/local/libexec/backup-success already exists' /tmp/openbao-backup-existing-writer.log
+          test "$(cat /usr/local/libexec/backup-success)" = planted
+          if id bbtest >/dev/null 2>&1 || id bbbao >/dev/null 2>&1; then
+            echo 'ASSERTION FAILED: backup success writer refusal created an account'; exit 1
+          fi
+          sudo rm /usr/local/libexec/backup-success
+      - name: openbao_backup role integration cases
+        run: |
+          sudo cp -p /etc/environment /tmp/openbao-backup-environment-before
+          sudo systemctl show-environment > /tmp/openbao-backup-manager-before
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_backup/run.sh > /tmp/openbao-backup-full.log 2>&1; then
+            cat /tmp/openbao-backup-full.log
+          else
+            tail -80 /tmp/openbao-backup-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/openbao-backup-full.log)" != 'openbao_backup driver: all cases passed'; then
+            echo 'ASSERTION FAILED: openbao_backup driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          for account in bbbao bbtest; do
+            if id "$account" >/dev/null 2>&1; then echo "ASSERTION FAILED: full driver left $account"; exit 1; fi
+            if test -e "/home/$account"; then echo "ASSERTION FAILED: full driver left /home/$account"; exit 1; fi
+            if test -e "/var/lib/systemd/linger/$account"; then echo "ASSERTION FAILED: full driver left lingering for $account"; exit 1; fi
+          done
+          for path in /etc/systemd/system/openbao-backup*; do
+            if test -e "$path" || test -L "$path"; then echo "ASSERTION FAILED: full driver left $path"; exit 1; fi
+          done
+          for port in 8200 8082 18200 18300 18301 18302; do
+            if test -n "$(ss -ltnH "sport = :$port")"; then echo "ASSERTION FAILED: full driver left a listener on $port"; exit 1; fi
+          done
+          if test -e /usr/local/libexec/backup-success; then echo 'ASSERTION FAILED: full driver left /usr/local/libexec/backup-success'; exit 1; fi
+          sudo cmp /tmp/openbao-backup-environment-before /etc/environment
+          sudo systemctl show-environment | cmp /tmp/openbao-backup-manager-before -
+
+  openbao-config:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.openbao_config == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m bctest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_config/run.sh > /tmp/openbao-config-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bctest already exists' /tmp/openbao-config-existing.log
+          test -d /home/bctest
+          id bctest
+          sudo userdel -r bctest
+      - name: Existing bcnone account is preserved
+        run: |
+          sudo useradd -m bcnone
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_config/run.sh > /tmp/openbao-config-existing-bcnone.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing bcnone account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bcnone already exists' /tmp/openbao-config-existing-bcnone.log
+          test -d /home/bcnone
+          id bcnone
+          sudo userdel -r bcnone
+      - name: Existing bcother account is preserved
+        run: |
+          sudo useradd -m bcother
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_config/run.sh > /tmp/openbao-config-existing-bcother.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing bcother account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: bcother already exists' /tmp/openbao-config-existing-bcother.log
+          test -d /home/bcother
+          id bcother
+          sudo userdel -r bcother
+      - name: openbao_config role integration cases
+        run: |
+          sudo cp -p /etc/environment /tmp/openbao-config-environment-before
+          sudo systemctl show-environment > /tmp/openbao-config-manager-before
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/openbao_config/run.sh > /tmp/openbao-config-full.log 2>&1; then
+            cat /tmp/openbao-config-full.log
+          else
+            tail -80 /tmp/openbao-config-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/openbao-config-full.log)" != 'openbao_config driver: all cases passed'; then
+            echo 'ASSERTION FAILED: openbao_config driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          if id bctest >/dev/null 2>&1; then echo 'ASSERTION FAILED: full driver left bctest'; exit 1; fi
+          if test -e /home/bctest; then echo 'ASSERTION FAILED: full driver left home'; exit 1; fi
+          if test -e /var/lib/systemd/linger/bctest; then echo 'ASSERTION FAILED: full driver left lingering'; exit 1; fi
+          if test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8200/ || true)" != 000; then echo 'ASSERTION FAILED: full driver left listener'; exit 1; fi
+          sudo cmp /tmp/openbao-config-environment-before /etc/environment
+          sudo systemctl show-environment | cmp /tmp/openbao-config-manager-before -
+
+  staging:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.staging == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt python3-apt
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m stgtest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/staging/run.sh > /tmp/staging-account-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: stgtest already exists' /tmp/staging-account-existing.log
+          test -d /home/stgtest
+          id stgtest
+          sudo userdel -r stgtest
+      - name: Existing staging folder is preserved
+        run: |
+          sudo mkdir -m 0700 /etc/staging
+          printf keep | sudo tee /etc/staging/redis-password >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/staging/run.sh > /tmp/staging-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing staging folder was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /etc/staging already exists' /tmp/staging-existing.log
+          test "$(sudo cat /etc/staging/redis-password)" = keep
+          sudo rm -rf /etc/staging
+      - name: Staging role integration cases
+        run: |
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/staging/run.sh > /tmp/staging-full.log 2>&1; then
+            cat /tmp/staging-full.log
+          else
+            tail -80 /tmp/staging-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/staging-full.log)" != 'staging driver: all cases passed'; then
+            echo 'ASSERTION FAILED: staging driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          if test -e /etc/staging || test -L /etc/staging; then
+            echo 'ASSERTION FAILED: full driver left /etc/staging'; exit 1
+          fi
+          if id stgtest >/dev/null 2>&1 || test -e /var/lib/systemd/linger/stgtest; then
+            echo 'ASSERTION FAILED: full driver left stgtest'; exit 1
+          fi
+          for unit in /etc/containers/systemd/staging-mail.network /etc/containers/systemd/mailpit.container; do
+            if test -e "$unit" || test -L "$unit"; then
+              echo "ASSERTION FAILED: full driver left $unit"; exit 1
+            fi
+          done
+          if sudo podman network exists staging-mail || sudo podman container exists mailpit; then
+            echo 'ASSERTION FAILED: full driver left Mailpit container or network'; exit 1
+          fi
+          for secret in mailpit-smtp-auth mailpit-tls-cert mailpit-tls-key; do
+            if sudo podman secret exists "$secret"; then
+              echo "ASSERTION FAILED: full driver left $secret"; exit 1
+            fi
+          done
+
+  web:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.web == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman passt libpam-systemd dbus-user-session python3-apt
+      - name: Existing account and folders are preserved
+        run: |
+          sudo useradd -m webtest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/web/run.sh > /tmp/web-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing webtest was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: webtest already exists' /tmp/web-existing.log
+          id webtest
+          test -d /home/webtest
+          test ! -e /srv/keepbreathing
+          test ! -e /srv/keepbreath-contact-api
+          sudo userdel -r webtest
+          sudo mkdir /srv/keepbreathing
+          printf keep | sudo tee /srv/keepbreathing/keep >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/web/run.sh > /tmp/web-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing site folder was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /srv/keepbreathing already exists' /tmp/web-existing.log
+          test "$(sudo cat /srv/keepbreathing/keep)" = keep
+          if id webtest >/dev/null 2>&1; then echo 'ASSERTION FAILED: webtest was created'; exit 1; fi
+          test ! -e /srv/keepbreath-contact-api
+          sudo rm -rf /srv/keepbreathing
+          sudo mkdir /srv/keepbreath-contact-api
+          printf keep | sudo tee /srv/keepbreath-contact-api/keep >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/web/run.sh > /tmp/web-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing contact API folder was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: /srv/keepbreath-contact-api already exists' /tmp/web-existing.log
+          test "$(sudo cat /srv/keepbreath-contact-api/keep)" = keep
+          if id webtest >/dev/null 2>&1; then echo 'ASSERTION FAILED: webtest was created'; exit 1; fi
+          test ! -e /srv/keepbreathing
+          sudo rm -rf /srv/keepbreath-contact-api
+      - name: Web role integration cases
+        run: |
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/web/run.sh > /tmp/web-full.log 2>&1; then
+            cat /tmp/web-full.log
+          else
+            tail -80 /tmp/web-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/web-full.log)" != 'web driver: all cases passed'; then
+            echo 'ASSERTION FAILED: web driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          for thing in webtest /home/webtest /srv/keepbreathing /srv/keepbreath-contact-api; do
+            if { test "$thing" = webtest && id webtest >/dev/null 2>&1; } || { test "$thing" != webtest && { test -e "$thing" || test -L "$thing"; }; }; then
+              echo "ASSERTION FAILED: full driver left $thing"; exit 1
+            fi
+          done
+
+  ticket-band:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.ticket_band == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman python3-apt
+      - name: Existing account is preserved
+        run: |
+          sudo useradd -m tbtest
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/ticket_band/run.sh > /tmp/ticket-band-existing.log 2>&1; then
+            echo 'ASSERTION FAILED: pre-existing account was accepted'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: tbtest already exists' /tmp/ticket-band-existing.log
+          test -d /home/tbtest
+          id tbtest
+          sudo userdel -r tbtest
+      - name: Existing digest files are preserved
+        run: |
+          for path in /usr/local/libexec/ticket-digest /etc/ticket-digest.json /etc/systemd/system/ticket-digest.service /etc/systemd/system/ticket-digest.timer /run/systemd/system/ticket-digest.service.d/driver-hold.conf /run/ticket-digest-driver-permit /var/lib/systemd/timers/stamp-ticket-digest.timer; do
+            sudo mkdir -p "$(dirname "$path")"
+            printf 'existing digest file\n' | sudo tee "$path" > /dev/null
+            if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/ticket_band/run.sh > /tmp/ticket-band-existing-digest.log 2>&1; then
+              echo "ASSERTION FAILED: pre-existing $path was accepted"; exit 1
+            fi
+            grep -Fx "ASSERTION FAILED: $path already exists" /tmp/ticket-band-existing-digest.log
+            test "$(sudo cat "$path")" = 'existing digest file'
+            if id tbtest >/dev/null 2>&1; then echo 'ASSERTION FAILED: a refusal created tbtest'; exit 1; fi
+            sudo rm "$path"
+          done
+          sudo rm -r /run/systemd/system/ticket-digest.service.d
+      - name: Ticket band role integration cases
+        run: |
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/ticket_band/run.sh > /tmp/ticket-band-full.log 2>&1; then
+            cat /tmp/ticket-band-full.log
+          else
+            tail -80 /tmp/ticket-band-full.log
+            exit 1
+          fi
+          if test "$(tail -1 /tmp/ticket-band-full.log)" != 'ticket_band driver: all cases passed'; then
+            echo 'ASSERTION FAILED: ticket band driver success message was not its last line'
+            exit 1
+          fi
+      - name: Full driver cleans up
+        run: |
+          if id tbtest >/dev/null 2>&1; then echo 'ASSERTION FAILED: full driver left tbtest'; exit 1; fi
+          if test -e /home/tbtest; then echo 'ASSERTION FAILED: full driver left home'; exit 1; fi
+          if test -e /var/lib/systemd/linger/tbtest; then echo 'ASSERTION FAILED: full driver left lingering'; exit 1; fi
+          for path in /usr/local/libexec/ticket-digest /etc/ticket-digest.json /etc/systemd/system/ticket-digest.service /etc/systemd/system/ticket-digest.timer /run/systemd/system/ticket-digest.service.d/driver-hold.conf /run/ticket-digest-driver-permit /var/lib/systemd/timers/stamp-ticket-digest.timer; do
+            if test -e "$path"; then echo "ASSERTION FAILED: full driver left $path"; exit 1; fi
+          done
+
+  hub-pull:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.hub_pull == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y podman apache2-utils openssh-server sudo && sudo update-alternatives --set sudo /usr/bin/sudo.ws
+      - name: The driver runs the droplets' classic sudo
+        run: |
+          test "$(readlink -f /usr/bin/sudo)" = /usr/bin/sudo.ws
+          sudo --version | head -1 | grep -q '^Sudo version '
+      - name: Existing hub pull accounts survive driver refusal
+        run: |
+          for account in hptest kbtest hubexport; do
+            sudo useradd -m "$account"
+            if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/hub_pull/run.sh > "/tmp/hub-pull-existing-$account.log" 2>&1; then
+              echo "ASSERTION FAILED: driver accepted existing $account"; exit 1
+            fi
+            grep -Fx "ASSERTION FAILED: $account already exists" "/tmp/hub-pull-existing-$account.log"
+            id "$account"
+            sudo userdel -r "$account"
+          done
+          sudo mkdir /etc/hub-export-test
+          echo keep | sudo tee /etc/hub-export-test/keep >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/hub_pull/run.sh > /tmp/hub-pull-existing-files.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted existing hub pull files'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: hub pull files already exist' /tmp/hub-pull-existing-files.log
+          test "$(sudo cat /etc/hub-export-test/keep)" = keep
+          sudo rm -r /etc/hub-export-test
+          echo keep | sudo tee /usr/local/libexec/backup-success >/dev/null
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/hub_pull/run.sh > /tmp/hub-pull-existing-writer.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted an existing backup success writer'; exit 1
+          fi
+          grep -Fx 'ASSERTION FAILED: hub pull files already exist' /tmp/hub-pull-existing-writer.log
+          test "$(sudo cat /usr/local/libexec/backup-success)" = keep
+          sudo rm /usr/local/libexec/backup-success
+      - name: Hub pull role integration cases and cleanup
+        shell: bash
+        run: |
+          ssh_before=$(systemctl is-active ssh.service ssh.socket || :)
+          sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/hub_pull/run.sh 2>&1 | tee driver.log
+          grep -Fxq 'hub_pull driver: all cases passed' driver.log
+          test "$(grep -c '^PASS ' driver.log)" -eq 21
+          if grep -E '^CLEANUP FAILED:' driver.log; then echo 'ASSERTION FAILED: driver cleanup failed'; exit 1; fi
+          for account in hptest kbtest hubexport; do
+            if id "$account" >/dev/null 2>&1; then echo "ASSERTION FAILED: driver left $account"; exit 1; fi
+          done
+          for path in /home/hptest/.config/systemd/user/hub-pull-run@.service /etc/systemd/system/hub-pull@.service /etc/systemd/system/hub-pull@.timer /etc/sudoers.d/hub-export /usr/local/libexec/hub-export /etc/ssh/authorized_keys/hubexport /etc/ssh/sshd_config.d/12-hub-export.conf /etc/ssh/sshd_config.d/11-authorized-keys.conf /etc/hub-export-test /root/.hub-export-test /usr/local/libexec/backup-success /etc/systemd/system/hub-pull@.service.d; do
+            if sudo test -e "$path"; then echo "ASSERTION FAILED: driver left $path"; exit 1; fi
+          done
+          if findmnt -rn -t tmpfs -o TARGET | grep -Eq '^/tmp/tmp\.[^/]+/backup$'; then echo 'ASSERTION FAILED: driver left backup tmpfs mounted'; exit 1; fi
+          test -z "$(systemctl list-units --all --no-legend 'hub-pull*')"
+          test "$ssh_before" = "$(systemctl is-active ssh.service ssh.socket || :)"
+      - name: Failure after the role cleans up
+        shell: bash
+        run: |
+          ssh_before=$(systemctl is-active ssh.service ssh.socket || :)
+          if sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" TEST_FAIL_AFTER_HUB_PULL_ROLE=1 bash tests/hub_pull/run.sh > /tmp/hub-pull-failure.log 2>&1; then
+            echo 'ASSERTION FAILED: driver accepted deliberate failure'; exit 1
+          fi
+          grep -F 'ASSERTION FAILED: deliberate failure after hub pull' /tmp/hub-pull-failure.log || { tail -35 /tmp/hub-pull-failure.log; exit 1; }
+          grep -F 'Deliberate failure after hub pull' /tmp/hub-pull-failure.log || { tail -35 /tmp/hub-pull-failure.log; exit 1; }
+          if grep -E '^CLEANUP FAILED:' /tmp/hub-pull-failure.log; then echo 'ASSERTION FAILED: failure cleanup failed'; exit 1; fi
+          for account in hptest kbtest hubexport; do
+            if id "$account" >/dev/null 2>&1; then echo "ASSERTION FAILED: failure run left $account"; exit 1; fi
+          done
+          for path in /home/hptest/.config/systemd/user/hub-pull-run@.service /etc/systemd/system/hub-pull@.service /etc/systemd/system/hub-pull@.timer /etc/sudoers.d/hub-export /usr/local/libexec/hub-export /etc/ssh/authorized_keys/hubexport /etc/ssh/sshd_config.d/12-hub-export.conf /etc/ssh/sshd_config.d/11-authorized-keys.conf /etc/hub-export-test /root/.hub-export-test /usr/local/libexec/backup-success /etc/systemd/system/hub-pull@.service.d; do
+            if sudo test -e "$path"; then echo "ASSERTION FAILED: failure run left $path"; exit 1; fi
+          done
+          if findmnt -rn -t tmpfs -o TARGET | grep -Eq '^/tmp/tmp\.[^/]+/backup$'; then echo 'ASSERTION FAILED: failure run left backup tmpfs mounted'; exit 1; fi
+          test -z "$(systemctl list-units --all --no-legend 'hub-pull*')"
+          test "$ssh_before" = "$(systemctl is-active ssh.service ssh.socket || :)"
+
+  hub-backup-disk:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.full == 'true' || needs.changes.outputs.hub_backup_disk == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: sudo apt-get update && sudo apt-get install -y xfsprogs
+      - run: sudo env "PATH=$PATH" "ANSIBLE_COLLECTIONS_PATH=$HOME/.ansible/collections" bash tests/hub_backup_disk/run.sh
+
+  python:
+    uses: sh4i-yurei/ci-workflows/.github/workflows/python.yml@abf03158b1efda671529abb6b5b5c6f430d18fc4
+    with:
+      coverage_floor: 100
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: python
+      system_packages: '["podman"]'
+      install_command: python -m pip install -r requirements.txt pytest==9.1.1 pytest-cov==7.1.0 && ansible-galaxy collection install -r ansible/collections/requirements.yml
+
+  ansible-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # ansible.cfg sets a relative roles path, so the checks only work from ansible/.
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # The laptop runs Ansible on 3.14; CI matches it.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      - run: ansible-lint
+
+  syntax-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - uses: actions/cache@v6
+        with:
+          path: ~/.ansible/collections
+          key: ${{ runner.os }}-ansible-collections-${{ hashFiles('ansible/collections/requirements.yml') }}
+      - run: ansible-galaxy collection install -r collections/requirements.yml
+      # Every playbook, so a new one is checked without editing this file. The secrets in
+      # group_vars come from bw lookups, which a syntax check never evaluates.
+      - run: |
+          for playbook in playbooks/*.yml; do
+            ansible-playbook --syntax-check "$playbook"
+          done
+
+  hub-rules:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r ../requirements.txt
+      - run: bash tests/hub_rules/check.sh
+      - run: bash tests/hub_rules/self-test.sh

@@ -1,0 +1,13 @@
+name: Python checks
+on:
+  push: {}
+permissions:
+  contents: read
+jobs:
+  python:
+    uses: sh4i-yurei/ci-workflows/.github/workflows/python.yml@abf03158b1efda671529abb6b5b5c6f430d18fc4
+    with:
+      coverage_floor: 1
+      install_command: python -m pip install ruff==0.16.0 pytest==9.1.1 pytest-cov==7.1.0
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: python
