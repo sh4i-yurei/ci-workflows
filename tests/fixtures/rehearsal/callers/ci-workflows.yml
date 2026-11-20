@@ -1,0 +1,35 @@
+name: CI
+on:
+  push: {}
+permissions:
+  contents: read
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+  checks:
+    uses: ./.github/workflows/python.yml
+    with:
+      coverage_floor: 100
+      install_command: python -m pip install -e '.[test,mutation]'
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: checks
+  powershell:
+    uses: ./.github/workflows/powershell.yml
+    with:
+      coverage_floor: 100
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: powershell
+      source_paths: '["tests/fixtures/powershell/two-folders/first", "tests/fixtures/powershell/two-folders/second"]'
+      tests_path: tests/fixtures/powershell/two-folders/test
+  shell:
+    uses: ./.github/workflows/shell.yml
+    with:
+      coverage_floor: 100
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: shell
+      source_paths: '["tests/fixtures/shell/two-folders/first", "tests/fixtures/shell/two-folders/second"]'
+      tests_path: tests/fixtures/shell/two-folders/test

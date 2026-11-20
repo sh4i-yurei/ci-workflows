@@ -1,0 +1,28 @@
+name: Python checks
+on:
+  push: {}
+permissions:
+  contents: read
+jobs:
+  python:
+    uses: sh4i-yurei/ci-workflows/.github/workflows/python.yml@abf03158b1efda671529abb6b5b5c6f430d18fc4
+    with:
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: python
+      coverage_floor: 69
+      install_command: |
+        archive="$RUNNER_TEMP/gh_2.97.0_linux_amd64.tar.gz"
+        curl -fsSL https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_amd64.tar.gz -o "$archive"
+        printf '%s  %s\n' a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112 "$archive" | sha256sum --check -
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/gh_2.97.0_linux_amd64/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/gh_2.97.0_linux_amd64/bin/gh" --version
+        python -m pip install PyYAML==6.0.3 pytest==9.1.1 pytest-cov==7.1.0 mutmut==3.8.0
+  shell:
+    uses: sh4i-yurei/ci-workflows/.github/workflows/shell.yml@58da91c02d82b0632d2a31fa9ee81bbb34dfe717
+    with:
+      caller_workflow: .github/workflows/ci.yml
+      caller_job: shell
+      source_paths: '["hooks", "skills/buildlog/scripts", "tools"]'
+      tests_path: tests/shell
+      coverage_floor: 73
