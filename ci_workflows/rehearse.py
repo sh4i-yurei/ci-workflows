@@ -123,11 +123,7 @@ class _Rehearsal:
 
     def _snapshot(self, repo: Path) -> str:
         """Commit the caller's worktree as it stands in a clone at repo."""
-        subprocess.run(
-            ["git", "clone", "-q", str(self.caller), str(repo)],
-            check=True,
-            capture_output=True,
-        )
+        _git(repo.parent, "clone", str(self.caller), repo.name)
         for name in _listed(repo):
             (repo / name).unlink()
         for name in _listed(self.caller, "-co", "--exclude-standard"):
@@ -139,9 +135,9 @@ class _Rehearsal:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(source, target)
         _git(repo, "add", "-A")
-        _git(repo, *IDENTITY, "commit", "-q", "--allow-empty", "-m", "rehearsal")
+        _git(repo, *IDENTITY, "commit", "--allow-empty", "-m", "rehearsal")
         try:
-            _git(repo, "fetch", "-q", str(self.caller), ORIGIN_MAIN)
+            _git(repo, "fetch", str(self.caller), ORIGIN_MAIN)
         except subprocess.CalledProcessError:
             raise ConfigurationError(
                 f"{self.caller} has no origin/main; fetch it first"

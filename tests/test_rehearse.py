@@ -1,5 +1,7 @@
 """Run a CI rehearsal plan in a scratch folder."""
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -171,6 +173,32 @@ def test_skip_step_prints_its_reason(repos, scratch, capsys):
     assert folders(scratch) == []
 
 
+def test_heading_comes_before_the_step_output(repos, scratch, tmp_path):
+    """A step's heading reaches standard output before the step's own output.
+
+    Standard output here is a buffered text layer over descriptor 1, as when
+    run's output goes to a pipe, so a heading left in the buffer would land
+    after the output the step's command writes straight to descriptor 1.
+    """
+    caller, shared, _ = repos
+    output = tmp_path / "stdout.txt"
+    saved = os.dup(1)
+    with output.open("wb") as file:
+        os.dup2(file.fileno(), 1)
+    try:
+        buffered = io.TextIOWrapper(
+            io.FileIO(1, "w", closefd=False), write_through=False
+        )
+        with contextlib.redirect_stdout(buffered):
+            code = run(plan(job(run_step("Echo", "echo from-step\n"))), caller, shared)
+        buffered.flush()
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+    assert code == 0
+    assert output.read_text().splitlines()[:2] == [f"{HEADING}Echo", "from-step"]
+
+
 def test_snapshot_keeps_file_modes_and_links(repos, scratch, capsys):
     caller, shared, _ = repos
     script = caller / "run.sh"
@@ -263,6 +291,13 @@ def test_snapshot_takes_origin_main_from_the_caller(repos, scratch, capsys):
     assert run(plan(job(show)), caller, shared, keep=True) == 0
     folder = kept(scratch, capsys.readouterr().out) / "job-1"
     assert (folder / "runner-temp" / "main.txt").read_text() == f"{origin_main}\n"
+
+
+def test_snapshot_commit_is_named_rehearsal(repos, scratch, capsys):
+    caller, shared, _ = repos
+    assert run(plan(job(run_step("Step", "true\n"))), caller, shared, keep=True) == 0
+    repo = kept(scratch, capsys.readouterr().out) / "job-1" / "repo"
+    assert git(repo, "log", "-1", "--format=%s") == "rehearsal\n"
 
 
 def test_run_step_gets_only_its_own_and_runner_variables(
@@ -399,6 +434,15 @@ def test_run_step_uses_its_planned_shell(
     folder = kept(scratch, out) / "job-1"
     assert summary(out)[1] == f"  Shell: {result}"
     assert (folder / "runner-temp" / "r.txt").exists() is reached
+
+
+def test_run_steps_are_numbered_from_one(repos, scratch, capsys):
+    caller, shared, _ = repos
+    steps = job(run_step("One", "echo one\n"), run_step("Two", "echo two\n"))
+    assert run(plan(steps), caller, shared, keep=True) == 0
+    folder = kept(scratch, capsys.readouterr().out) / "job-1"
+    assert (folder / "step-1.sh").read_text() == "echo one\n"
+    assert (folder / "step-2.sh").read_text() == "echo two\n"
 
 
 @pytest.mark.parametrize("path", [".ci-workflows", "nested/shared"])
