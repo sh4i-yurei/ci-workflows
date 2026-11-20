@@ -684,7 +684,13 @@ def test_mutation_config_preserves_fixture_and_source_order(tmp_path, monkeypatc
 def test_mutation_config_preserves_repository_project(tmp_path, monkeypatch):
     root = Path(__file__).parent.parent
     project = tmp_path / "pyproject.toml"
-    project.write_bytes((root / "pyproject.toml").read_bytes())
+    project.write_bytes(
+        subprocess.run(
+            ["git", "-C", str(root), "show", "HEAD:pyproject.toml"],
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
     (tmp_path / "ci_workflows").mkdir()
     (tmp_path / "ci_workflows/mutation.py").write_bytes(
         (root / "ci_workflows/mutation.py").read_bytes()
