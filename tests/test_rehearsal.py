@@ -547,6 +547,21 @@ def test_detached_caller(tmp_path):
     assert refusal(caller, shared) == f"not on a branch: {caller}"
 
 
+@pytest.mark.parametrize("state", ["no repository", "no commit"])
+def test_caller_without_a_commit_is_refused(tmp_path, state):
+    shared, pin = shared_repo(tmp_path)
+    caller = tmp_path / "caller"
+    if state == "no repository":
+        caller.mkdir()
+    else:
+        new_repo(caller, branch="agent/sample")
+    workflows = caller / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(caller_text("claude-config.yml", pin))
+
+    assert refusal(caller, shared) == f"not a git repository with a commit: {caller}"
+
+
 def test_job_with_neither_uses_nor_steps(tmp_path):
     caller, shared, _ = claude_config(
         tmp_path, lambda text, pin: text + "  bare:\n    runs-on: ubuntu-latest\n"
@@ -668,6 +683,90 @@ def test_changed_shared_python_at_pin(tmp_path, old, new, message):
     assert refusal(caller, shared) == message
 
 
+def caller_at_second_python_pin(tmp_path, python):
+    """A claude-config caller whose python job pins a second commit holding python."""
+    shared, pin = shared_repo(tmp_path)
+    second = changed_pin(shared, {"python.yml": python})
+    text = edit(
+        caller_text("claude-config.yml", pin),
+        f"python.yml@{pin}",
+        f"python.yml@{second}",
+    )
+    return caller_repo(tmp_path, {"ci.yml": text}), shared
+
+
+ROUND1_CHANGES = {
+    "action with a second @": (
+        "      - name: Install system packages\n",
+        "      - name: Cache\n        uses: actions/cache@v4@extra\n"
+        "      - name: Install system packages\n",
+        "python.yml job tests: step 'Cache' unknown action actions/cache",
+    ),
+    "unknown expression in the shared checkout's path": (
+        "          path: .ci-workflows\n",
+        "          path: ${{ github.sha }}\n",
+        "python.yml job tests: step 'Check out pinned shared checks' unknown expression ${{ github.sha }}",
+    ),
+    "unknown expression in python-version": (
+        "          python-version: '3.12'\n",
+        "          python-version: ${{ github.sha }}\n",
+        "python.yml job tests: step 'Set up Python' unknown expression ${{ github.sha }}",
+    ),
+    "unknown expression in a run step's env": (
+        "          INSTALL_COMMAND: ${{ inputs.install_command }}\n",
+        "          INSTALL_COMMAND: ${{ github.sha }}\n",
+        "python.yml job tests: step 'Install caller' unknown expression ${{ github.sha }}",
+    ),
+    "the package condition on another step": (
+        "      - name: Install shared checks\n",
+        "      - name: Install shared checks\n        if: inputs.system_packages != '[]'\n",
+        "python.yml job tests: step 'Install shared checks' unknown expression inputs.system_packages != '[]'",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "old, new, message", ROUND1_CHANGES.values(), ids=ROUND1_CHANGES.keys()
+)
+def test_round1_refusals_at_pin(tmp_path, old, new, message):
+    caller, shared = caller_at_second_python_pin(
+        tmp_path, edit(SHARED_PYTHON, old, new)
+    )
+
+    assert refusal(caller, shared) == message
+
+
+def test_known_expressions_in_checkout_path_and_python_version(tmp_path):
+    default_branch = "${{ github.event.repository.default_branch }}"
+    python = edit(
+        edit(
+            SHARED_PYTHON,
+            "          path: .ci-workflows\n",
+            f"          path: {default_branch}\n",
+        ),
+        "          python-version: '3.12'\n",
+        f"          python-version: {default_branch}\n",
+    )
+    caller, shared = caller_at_second_python_pin(tmp_path, python)
+
+    steps = plan(caller, shared)["jobs"][0]["steps"]
+
+    assert steps[1:3] == [
+        {
+            "name": "Check out pinned shared checks",
+            "kind": "checkout-shared",
+            "path": "main",
+        },
+        {"name": "Set up Python", "kind": "setup-python", "version": "main"},
+    ]
+
+
+def test_shared_workflow_that_is_not_a_workflow(tmp_path):
+    caller, shared = caller_at_second_python_pin(tmp_path, "just: text\n")
+
+    assert refusal(caller, shared) == "python.yml: not a workflow"
+
+
 @pytest.mark.parametrize("steps", ["run tests", {"name": "Check out caller"}])
 def test_shared_steps_that_are_not_a_list(tmp_path, steps):
     document = yaml.safe_load(SHARED_PYTHON)
@@ -777,6 +876,19 @@ def test_reusable_workflow_files_are_not_listed(tmp_path, trigger, listed):
 
     assert [job["job"] for job in jobs[:2]] == ["python", "shell"]
     assert jobs[2:] == listed
+
+
+def test_reusable_file_sorted_before_ci_is_skipped(tmp_path):
+    caller, shared, _ = claude_config(
+        tmp_path, extra={"a-reuse.yml": "on:\n  workflow_call: {}\n" + REUSE_JOB}
+    )
+
+    jobs = plan(caller, shared)["jobs"]
+
+    assert [(job["workflow"], job["job"]) for job in jobs] == [
+        (".github/workflows/ci.yml", "python"),
+        (".github/workflows/ci.yml", "shell"),
+    ]
 
 
 def test_drift_against_this_repository_workflows(tmp_path):

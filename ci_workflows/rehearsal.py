@@ -61,9 +61,10 @@ SYSTEM_PACKAGES_IF = "inputs.system_packages != '[]'"
 
 def plan(caller: Path, shared_repo: Path) -> dict:
     """Return the rehearsal plan for the repository at caller."""
-    branch = _git(
-        caller, "rev-parse", "--abbrev-ref", "HEAD", check=True
-    ).stdout.strip()
+    found = _git(caller, "rev-parse", "--abbrev-ref", "HEAD")
+    if found.returncode != 0:
+        raise ConfigurationError(f"not a git repository with a commit: {caller}")
+    branch = found.stdout.strip()
     if branch == "HEAD":
         raise ConfigurationError(f"not on a branch: {caller}")
     event = {"BASE_SHA": ZEROS, "DEFAULT_BRANCH": DEFAULT_BRANCH, "PUSHED_REF": branch}
@@ -81,9 +82,9 @@ def plan(caller: Path, shared_repo: Path) -> dict:
     return {"branch": branch, "event": event, "jobs": jobs}
 
 
-def _git(folder: Path, *args: str, check: bool = False) -> subprocess.CompletedProcess:
+def _git(folder: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", str(folder), *args], capture_output=True, text=True, check=check
+        ["git", "-C", str(folder), *args], capture_output=True, text=True
     )
 
 
