@@ -47,6 +47,14 @@ jobs:
         run: bash -e -o pipefail -c "$INSTALL_COMMAND"
         env:
           INSTALL_COMMAND: ${{ inputs.install_command }}
+      - name: Type-check TypeScript
+        shell: bash
+        run: |
+          if [[ -f tsconfig.json ]]; then
+            npx --no-install tsc --strict --noEmit -p tsconfig.json
+          else
+            echo "no tsconfig.json; type check skipped"
+          fi
       - name: Run Node tests with branch coverage
         run: node --test --experimental-test-coverage --test-coverage-exclude='**/test/**' --test-coverage-exclude='**/tests/**' --test-coverage-exclude='**/*.test.*' --test-coverage-exclude='**/*.spec.*' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage.lcov
       - name: Check floor ratchet

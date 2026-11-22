@@ -57,7 +57,7 @@ base_workflow() {
 sources() {
   case $1 in
     python) "$PYTHON" -m ci_workflows filter-sources --config pyproject.toml ;;
-    javascript) "$PYTHON" -m ci_workflows filter-sources --roots-json "$MUTATION_SOURCES" --extension .js --extension .mjs --extension .cjs ;;
+    javascript) "$PYTHON" -m ci_workflows filter-sources --roots-json "$MUTATION_SOURCES" --extension .js --extension .mjs --extension .cjs --extension .ts --extension .mts --extension .cts ;;
     *) echo "unknown language: $1" >&2; return 2 ;;
   esac
 }
@@ -259,7 +259,7 @@ mutate_javascript() {
   local -a changed=() scope=()
   local file mutate_globs
   local changed_text
-  changed_text=$(diff_files names '*.js' '*.mjs' '*.cjs' | sources javascript)
+  changed_text=$(diff_files names '*.js' '*.mjs' '*.cjs' '*.ts' '*.mts' '*.cts' | sources javascript)
   if [[ -n $changed_text ]]; then mapfile -t changed <<< "$changed_text"; fi
   (( ${#changed[@]} )) || return 0
   for file in "${changed[@]}"; do

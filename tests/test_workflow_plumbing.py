@@ -484,6 +484,23 @@ def test_floor_and_changed_gates_pass_base_and_exact_diff(commits, tmp_path):
     assert "--- a/src/app.py\n+++ b/src/app.py\n" in diff_log.read_text()
 
 
+def test_javascript_sources_include_typescript(commits):
+    repo, base = commits
+    result = run(
+        repo,
+        "sources",
+        "javascript",
+        base_sha=base,
+        input_text="src/app.js\nsrc/app.ts\nsrc/b.mts\nsrc/c.cts\nsrc/app.test.ts\nsrc/types.d.ts\n",
+        extra_env={"MUTATION_SOURCES": '["src"]'},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "src/app.js\nsrc/app.ts\nsrc/b.mts\nsrc/c.cts\n",
+        "",
+    )
+
+
 @pytest.fixture
 def mutation_stubs(commits, tmp_path):
     repo, base = commits
@@ -571,6 +588,32 @@ JAVASCRIPT_MUTATION_CALLS = (
     "reports/mutation/mutation.json --survivors-file .mutation-survivors.yml "
     "--selected-file src/app.js --selected-file src/other file.js\n"
 )
+
+
+def test_mutation_selects_typescript_source(mutation_stubs):
+    repo, base, env, log = mutation_stubs
+    (repo / "src/app.ts").write_text("export const z: number = 3;\n")
+    subprocess.run(["git", "add", "src/app.ts"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "typescript",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    result = run(repo, "mutate-javascript", base_sha=base, extra_env=env)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert log.read_text() == (
+        "npx argc=7 --no-install stryker run --mutate src/app.js,src/app.ts,src/other file.js --reporters json,clear-text\n"
+        "python -m ci_workflows survivors --format stryker --results reports/mutation/mutation.json --survivors-file .mutation-survivors.yml --selected-file src/app.js --selected-file src/app.ts --selected-file src/other file.js\n"
+    )
 
 
 def test_mutation_commands_pass_exact_selectors_and_scope(mutation_stubs):

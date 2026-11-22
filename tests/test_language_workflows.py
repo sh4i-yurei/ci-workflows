@@ -60,6 +60,7 @@ def test_javascript_workflow_runs_branch_coverage_and_changed_lines():
         "Set up Python",
         "Install shared checks",
         "Install caller",
+        "Type-check TypeScript",
         "Run Node tests with branch coverage",
         "Check floor ratchet",
         "Check changed lines",
@@ -93,6 +94,71 @@ def test_javascript_workflow_runs_branch_coverage_and_changed_lines():
         changed["run"]
         == "bash .ci-workflows/scripts/workflow-glue.sh changed javascript coverage.lcov"
     )
+
+
+def test_typescript_type_check_step(tmp_path):
+    steps = workflow("javascript.yml")["jobs"]["checks"]["steps"]
+    assert [step["name"] for step in steps] == [
+        "Check out caller",
+        "Check out pinned shared checks",
+        "Set up Node",
+        "Set up Python",
+        "Install shared checks",
+        "Install caller",
+        "Type-check TypeScript",
+        "Run Node tests with branch coverage",
+        "Check floor ratchet",
+        "Check changed lines",
+    ]
+    step = next(step for step in steps if step["name"] == "Type-check TypeScript")
+    assert step["shell"] == "bash"
+    assert "if" not in step
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "npx.log"
+    stub = bin_dir / "npx"
+    stub.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "'
+        + str(log)
+        + '"\nexit "${NPX_EXIT:-0}"\n'
+    )
+    stub.chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    skipped = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (skipped.returncode, skipped.stdout, skipped.stderr, log.exists()) == (
+        0,
+        "no tsconfig.json; type check skipped\n",
+        "",
+        False,
+    )
+    (tmp_path / "tsconfig.json").write_text("{}\n")
+    failed = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        env={**env, "NPX_EXIT": "2"},
+        capture_output=True,
+        text=True,
+    )
+    assert (failed.returncode, failed.stdout, failed.stderr, log.read_text()) == (
+        2,
+        "",
+        "",
+        "--no-install tsc --strict --noEmit -p tsconfig.json\n",
+    )
+    passed = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (passed.returncode, passed.stdout, passed.stderr) == (0, "", "")
 
 
 def test_javascript_workflow_excludes_tests_and_prints_failure(tmp_path):

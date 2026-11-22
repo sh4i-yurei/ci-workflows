@@ -403,6 +403,82 @@ def test_javascript_changed_lines(tmp_path, hits, branches, expected):
     )
 
 
+@pytest.mark.parametrize("source", ["src/app.ts", "src/app.mts", "src/app.cts"])
+@pytest.mark.parametrize(
+    ("hits", "branches", "code", "message"),
+    [
+        (1, (1, 1), 0, "all changed lines covered\n"),
+        (0, (0, 0), 1, "uncovered changed lines: {source}:2\n"),
+        (1, (1, 0), 1, "uncovered changed lines: {source}:2\n"),
+    ],
+)
+def test_typescript_changed_lines(tmp_path, source, hits, branches, code, message):
+    report = lcov(tmp_path, hits, branches)
+    report.write_text(report.read_text().replace("SF:src/app.js", f"SF:{source}"))
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        patch(tmp_path, source),
+    ) == (code, message.format(source=source), "")
+
+
+@pytest.mark.parametrize(
+    "test_file", ["src/app.test.ts", "src/app.spec.mts", "src/test/helper.cts"]
+)
+def test_typescript_changed_test_is_skipped(tmp_path, test_file):
+    report = lcov(tmp_path)
+    report.write_text(report.read_text().replace("SF:src/app.js", "SF:src/app.ts"))
+    source_patch = patch(tmp_path, "src/app.ts").read_text()
+    test_patch = patch(tmp_path, test_file).read_text()
+    combined = tmp_path / "combined.patch"
+    combined.write_text(source_patch + test_patch)
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--diff-file",
+        combined,
+    ) == (
+        0,
+        f"all changed lines covered; skipped changed source outside declared paths: {test_file}\n",
+        "",
+    )
+
+
+def test_typescript_declarations_are_not_changed_sources(tmp_path):
+    report = lcov(tmp_path)
+    report.write_text(report.read_text().replace("SF:src/app.js", "SF:src/app.ts"))
+    combined = tmp_path / "combined.patch"
+    combined.write_text(
+        "".join(
+            patch(tmp_path, name).read_text()
+            for name in (
+                "src/app.ts",
+                "src/types.d.ts",
+                "src/more.d.mts",
+                "src/old.d.cts",
+            )
+        )
+    )
+    assert invoke(
+        "changed-lines",
+        "--kind",
+        "javascript",
+        "--report",
+        report,
+        "--source-roots-json",
+        '["src"]',
+        "--diff-file",
+        combined,
+    ) == (0, "all changed lines covered\n", "")
+
+
 def test_javascript_floor_uses_reported_branch_denominator(tmp_path):
     report = lcov(tmp_path, branches=(1, 0))
     assert invoke(
@@ -540,6 +616,28 @@ def test_javascript_filter_excludes_colocated_cjs_test(monkeypatch):
     assert invoke(
         "filter-sources", "--roots-json", '["src"]', "--extension", ".cjs"
     ) == (0, "src/app.cjs\n", "")
+
+
+def test_typescript_filter_excludes_tests_and_declarations(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            "src/app.ts\nsrc/app.test.ts\nsrc/b.mts\nsrc/c.cts\n"
+            "src/types.d.ts\nsrc/test/x.ts\nlib/d.ts\n"
+        ),
+    )
+    assert invoke(
+        "filter-sources",
+        "--roots-json",
+        '["src"]',
+        "--extension",
+        ".ts",
+        "--extension",
+        ".mts",
+        "--extension",
+        ".cts",
+    ) == (0, "src/app.ts\nsrc/b.mts\nsrc/c.cts\n", "")
 
 
 def test_javascript_multiple_changed_sources_keep_lcov_records(tmp_path):
