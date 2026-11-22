@@ -139,3 +139,5 @@
   reason: After a YAML error the document is set to None, and the mutant sets it to an empty string; the next check refuses anything that isn't a mapping, so both give the same not-a-workflow refusal.
 - mutant: ci_workflows.rehearsal.x__packages__mutmut_25
   reason: After a JSON error the packages are set to None, and the mutant sets them to an empty string; the next check refuses anything that isn't a list of strings, so both give the same not-a-JSON-list refusal.
+- mutant: ci_workflows.rehearse.xǁ_Rehearsalǁ__init____mutmut_4
+  reason: The flag starts as False and the mutant starts it as None; it is only read as the condition keep and rehearsal.ran, where both are false, so the folder is removed either way.
