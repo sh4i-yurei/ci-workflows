@@ -64,15 +64,15 @@
   reason: An env shebang with no later command is not shell whether the fallback is empty or None.
 - mutant: ci_workflows.checks.x__shell_source__mutmut_39
   reason: An env shebang with no later command is not shell whether the fallback is empty or XXXX.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_78
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_82
   reason: Other language paths are already filtered by their suffix before the source-root filter sees them.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_140
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_144
   reason: The temporary LCOV filename changes, but its contents and the public verdict
     remain identical.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_141
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_145
   reason: The temporary LCOV filename changes case, but its contents and the public
     verdict remain identical.
-- mutant: ci_workflows.checks.x_changed_lines__mutmut_182
+- mutant: ci_workflows.checks.x_changed_lines__mutmut_186
   reason: Passing the current directory as cwd to subprocess.run has the same effect
     as omitting cwd.
 - mutant: ci_workflows.checks.x_floor_check__mutmut_18
