@@ -18,6 +18,8 @@ GLUE = ROOT / "scripts/workflow-glue.sh"
 
 
 def test_rehearse_script_passes_locked_command(tmp_path):
+    caller = tmp_path / "caller"
+    caller.mkdir()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     record = tmp_path / "uv-args.txt"
@@ -26,7 +28,7 @@ def test_rehearse_script_passes_locked_command(tmp_path):
     uv.chmod(0o755)
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/rehearse"), "--keep"],
-        cwd=tmp_path,
+        cwd=caller,
         env={"PATH": f"{bin_dir}:/usr/bin:/bin", "RECORD": str(record)},
         text=True,
         capture_output=True,
