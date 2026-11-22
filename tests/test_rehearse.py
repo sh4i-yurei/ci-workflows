@@ -221,6 +221,53 @@ def test_rehearse_explicit_caller(gate_repos, scratch, capfd):
     assert folders(scratch) == []
 
 
+def test_rehearse_reads_a_pinned_workflow_from_the_shared_repo(
+    tmp_path, scratch, capfd
+):
+    shared = new_repo(tmp_path / "pinned-shared")
+    shared_workflows = shared / ".github" / "workflows"
+    shared_workflows.mkdir(parents=True)
+    (shared_workflows / "shell.yml").write_text(
+        "name: Shell\n"
+        "on:\n"
+        "  workflow_call:\n"
+        "    inputs: {}\n"
+        "jobs:\n"
+        "  checks:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: Say hello\n"
+        "        run: echo hello from the pinned workflow\n"
+    )
+    pin = commit(shared, "shared workflow")
+
+    caller = new_repo(tmp_path / "pinned-caller", branch="agent/sample")
+    caller_workflows = caller / ".github" / "workflows"
+    caller_workflows.mkdir(parents=True)
+    (caller_workflows / "ci.yml").write_text(
+        "name: CI\n"
+        "on: push\n"
+        "jobs:\n"
+        "  checks:\n"
+        f"    uses: sh4i-yurei/ci-workflows/.github/workflows/shell.yml@{pin}\n"
+    )
+    commit(caller)
+    git(caller, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    assert command(
+        capfd, "rehearse", "--caller", str(caller), "--shared-repo", str(shared)
+    ) == (
+        0,
+        "== .github/workflows/ci.yml checks: Say hello\n"
+        "hello from the pinned workflow\n"
+        "== summary\n"
+        ".github/workflows/ci.yml checks:\n"
+        "  Say hello: ok\n"
+        "no runner packages missing\n",
+        "",
+    )
+
+
 def test_rehearse_defaults_to_current_folder(gate_repos, scratch, capfd, monkeypatch):
     caller, shared = gate_repos
     monkeypatch.chdir(caller)
