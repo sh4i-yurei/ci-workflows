@@ -31,6 +31,15 @@ from ci_workflows.rules import alert_cases
 from ci_workflows.tailnet import policy_cases
 from ci_workflows.survivors import load_explanations
 
+JAVASCRIPT_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts")
+JAVASCRIPT_DECLARATION_SUFFIXES = (".d.ts", ".d.mts", ".d.cts")
+
+
+def _javascript_source_path(value: str) -> bool:
+    return value.endswith(JAVASCRIPT_SUFFIXES) and not value.endswith(
+        JAVASCRIPT_DECLARATION_SUFFIXES
+    )
+
 
 def _changed_lines(patch_text: str) -> dict[str, set[int]]:
     patches = PatchSet(io.StringIO(patch_text))
@@ -199,7 +208,7 @@ def changed_lines(
     changed = _changed_lines(patch_text)
     suffixes = {
         "python": (".py",),
-        "javascript": (".js", ".mjs", ".cjs"),
+        "javascript": JAVASCRIPT_SUFFIXES,
         "shell": (".sh", ".bash"),
         "powershell": (".ps1", ".psm1"),
     }
@@ -213,7 +222,8 @@ def changed_lines(
         path: lines
         for path, lines in changed.items()
         if (
-            path.endswith(suffixes[kind])
+            (kind == "javascript" and _javascript_source_path(path))
+            or (kind != "javascript" and path.endswith(suffixes[kind]))
             or (kind == "shell" and not Path(path).suffix and _shell_source(path))
         )
         and lines
@@ -642,7 +652,8 @@ def filter_sources(
         if name
         and Path(name).suffix in allowed_extensions
         and not (
-            Path(name).suffix in {".js", ".mjs", ".cjs"} and _javascript_test_path(name)
+            Path(name).suffix in JAVASCRIPT_SUFFIXES
+            and (not _javascript_source_path(name) or _javascript_test_path(name))
         )
         and any(Path(name).is_relative_to(root) for root in source_paths)
     ]
