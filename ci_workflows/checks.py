@@ -20,6 +20,7 @@ import yaml
 from unidiff import PatchSet
 
 from ci_workflows.errors import ConfigurationError
+from ci_workflows import rehearsal, rehearse
 from ci_workflows.mutation import (
     checks_verdict as mutation_checks_verdict,
     configure as mutation_configure,
@@ -736,6 +737,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     policy.add_argument("--api-base-url", default="https://api.tailscale.com")
     policy.add_argument("--timeout", type=float, default=10)
+    rehearsal_parser = commands.add_parser("rehearse")
+    rehearsal_parser.add_argument("--caller", type=Path, default=Path("."))
+    rehearsal_parser.add_argument("--shared-repo", type=Path, required=True)
+    rehearsal_parser.add_argument("--keep", action="store_true")
     args = parser.parse_args(argv)
     error_stream = (
         sys.stderr
@@ -747,11 +752,21 @@ def main(argv: list[str] | None = None) -> int:
             "mutation-plan",
             "mutation-merge",
             "mutation-config",
+            "rehearse",
         }
         else sys.stdout
     )
     try:
-        if args.command == "mutation-plan":
+        if args.command == "rehearse":
+            caller = args.caller.resolve()
+            shared_repo = args.shared_repo.resolve()
+            return rehearse.run(
+                rehearsal.plan(caller, shared_repo),
+                caller,
+                shared_repo,
+                keep=args.keep,
+            )
+        elif args.command == "mutation-plan":
             print(
                 json.dumps(
                     mutation_plan(args.source, args.selected_function, args.per_shard),

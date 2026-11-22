@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from ci_workflows.errors import ConfigurationError
+from ci_workflows.checks import main
 from ci_workflows.rehearse import run
 
 ZEROS = "0" * 40
@@ -157,6 +158,167 @@ def stand_in_uv(tmp_path, monkeypatch, code=0):
     uv.chmod(0o755)
     monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ['PATH']}")
     return record
+
+
+OUT = (
+    "== .github/workflows/ci.yml checks: Say hello\n"
+    "hello from the rehearsal\n"
+    "== summary\n"
+    ".github/workflows/ci.yml lint: not rehearsed: no shared workflow\n"
+    ".github/workflows/ci.yml checks:\n"
+    "  Say hello: ok\n"
+    "no runner packages missing\n"
+)
+
+
+@pytest.fixture
+def gate_repos(tmp_path):
+    caller = new_repo(tmp_path / "gate-caller", branch="agent/sample")
+    workflows = caller / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(
+        "name: CI\n"
+        "on: push\n"
+        "jobs:\n"
+        "  lint:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo lint\n"
+        "  checks:\n"
+        "    uses: ./.github/workflows/shell.yml\n"
+    )
+    (workflows / "shell.yml").write_text(
+        "name: Shell\n"
+        "on:\n"
+        "  workflow_call:\n"
+        "    inputs: {}\n"
+        "jobs:\n"
+        "  checks:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: Say hello\n"
+        "        run: echo hello from the rehearsal\n"
+    )
+    commit(caller)
+    git(caller, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return caller, new_repo(tmp_path / "shared")
+
+
+def command(capfd, *args):
+    try:
+        code = main(list(args))
+    except SystemExit as error:
+        code = error.code
+    captured = capfd.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_rehearse_explicit_caller(gate_repos, scratch, capfd):
+    caller, shared = gate_repos
+    assert command(
+        capfd, "rehearse", "--caller", str(caller), "--shared-repo", str(shared)
+    ) == (0, OUT, "")
+    assert folders(scratch) == []
+
+
+def test_rehearse_reads_a_pinned_workflow_from_the_shared_repo(
+    tmp_path, scratch, capfd
+):
+    shared = new_repo(tmp_path / "pinned-shared")
+    shared_workflows = shared / ".github" / "workflows"
+    shared_workflows.mkdir(parents=True)
+    (shared_workflows / "shell.yml").write_text(
+        "name: Shell\n"
+        "on:\n"
+        "  workflow_call:\n"
+        "    inputs: {}\n"
+        "jobs:\n"
+        "  checks:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: Say hello\n"
+        "        run: echo hello from the pinned workflow\n"
+    )
+    pin = commit(shared, "shared workflow")
+
+    caller = new_repo(tmp_path / "pinned-caller", branch="agent/sample")
+    caller_workflows = caller / ".github" / "workflows"
+    caller_workflows.mkdir(parents=True)
+    (caller_workflows / "ci.yml").write_text(
+        "name: CI\n"
+        "on: push\n"
+        "jobs:\n"
+        "  checks:\n"
+        f"    uses: sh4i-yurei/ci-workflows/.github/workflows/shell.yml@{pin}\n"
+    )
+    commit(caller)
+    git(caller, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    assert command(
+        capfd, "rehearse", "--caller", str(caller), "--shared-repo", str(shared)
+    ) == (
+        0,
+        "== .github/workflows/ci.yml checks: Say hello\n"
+        "hello from the pinned workflow\n"
+        "== summary\n"
+        ".github/workflows/ci.yml checks:\n"
+        "  Say hello: ok\n"
+        "no runner packages missing\n",
+        "",
+    )
+
+
+def test_rehearse_defaults_to_current_folder(gate_repos, scratch, capfd, monkeypatch):
+    caller, shared = gate_repos
+    monkeypatch.chdir(caller)
+    assert command(capfd, "rehearse", "--shared-repo", str(shared)) == (0, OUT, "")
+
+
+def test_rehearse_keeps_scratch(gate_repos, scratch, capfd):
+    caller, shared = gate_repos
+    code, out, err = command(
+        capfd,
+        "rehearse",
+        "--caller",
+        str(caller),
+        "--shared-repo",
+        str(shared),
+        "--keep",
+    )
+    assert code == 0
+    assert err == ""
+    assert out.startswith(OUT)
+    assert kept(scratch, out).is_dir()
+
+
+def test_rehearse_reports_failed_step(gate_repos, scratch, capfd):
+    caller, shared = gate_repos
+    workflow = caller / ".github" / "workflows" / "shell.yml"
+    workflow.write_text(
+        workflow.read_text().replace("echo hello from the rehearsal", "exit 3")
+    )
+    code, out, err = command(
+        capfd, "rehearse", "--caller", str(caller), "--shared-repo", str(shared)
+    )
+    assert code == 1
+    assert err == ""
+    assert "  Say hello: failed (exit 3)\n" in out
+
+
+def test_rehearse_refuses_detached_caller(gate_repos, scratch, capfd):
+    caller, shared = gate_repos
+    git(caller, "checkout", "-q", "--detach")
+    assert command(
+        capfd, "rehearse", "--caller", str(caller), "--shared-repo", str(shared)
+    ) == (2, "", f"configuration error: not on a branch: {caller}\n")
+
+
+def test_rehearse_requires_shared_repo(gate_repos, capfd):
+    caller, _ = gate_repos
+    code, out, err = command(capfd, "rehearse", "--caller", str(caller))
+    assert code == 2
+    assert out == ""
+    assert "the following arguments are required: --shared-repo" in err
 
 
 def test_skip_step_prints_its_reason(repos, scratch, capsys):

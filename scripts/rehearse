@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+exec uv run --isolated --no-project --python 3.12 --with-requirements "$ROOT/requirements/ci-lock.txt" -- env PYTHONPATH="$ROOT" python -m ci_workflows rehearse --shared-repo "$ROOT" "$@"

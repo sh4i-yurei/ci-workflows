@@ -51,6 +51,8 @@ Mutation is skipped on a push to the default branch, because the branch's own pu
 
 ## Pinning a caller
 
+Run `bash scripts/rehearse` from a caller's worktree, or pass `--caller <path>`, to rehearse that caller's push CI on the laptop. It runs every `run:` step of each job that uses `python.yml` or `shell.yml`, checks runner-package steps without installing anything, skips what the plan skips, and lists every other job as not rehearsed. The summary names runner packages the machine lacks. The script uses its own ci-workflows checkout as the shared repository; that checkout must hold the commit pinned by the caller. It removes its scratch folder unless given `--keep`.
+
 Trigger the caller workflow on push only. A push run's checks on a pull request's head commit count toward the pull request's required checks, so a pull_request trigger would run the same checks a second time.
 
 Call a workflow with a full commit SHA, then update the pin deliberately after reviewing changes:
