@@ -17,6 +17,43 @@ ROOT = Path(__file__).resolve().parents[1]
 GLUE = ROOT / "scripts/workflow-glue.sh"
 
 
+def test_rehearse_script_passes_locked_command(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    record = tmp_path / "uv-args.txt"
+    uv = bin_dir / "uv"
+    uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$RECORD"\nexit 7\n')
+    uv.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/rehearse"), "--keep"],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "RECORD": str(record)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 7
+    assert record.read_text().splitlines() == [
+        "run",
+        "--isolated",
+        "--no-project",
+        "--python",
+        "3.12",
+        "--with-requirements",
+        str(ROOT / "requirements/ci-lock.txt"),
+        "--",
+        "env",
+        f"PYTHONPATH={ROOT}",
+        "python",
+        "-m",
+        "ci_workflows",
+        "rehearse",
+        "--shared-repo",
+        str(ROOT),
+        "--keep",
+    ]
+
+
 def run(repo, *args, base_sha="", input_text="", extra_env=None):
     env = {
         "PATH": os.environ["PATH"],

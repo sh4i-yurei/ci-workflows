@@ -417,7 +417,7 @@ def test_architecture_documents_local_mutation_and_push_only_ci():
 def test_architecture_assigns_mutation_ownership():
     architecture = (ROOT / "ARCHITECTURE.md").read_text()
     rows = [line for line in architecture.splitlines() if line.startswith("| `")]
-    checks = "| `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`; it also parses `mutation-plan`, `mutation-merge`, `mutation-config` and `mutation-checks`, hands them to `mutation.py`, and runs the survivors gate on the results `mutation-checks` merges. | Grow another kind of check; a new kind gets its own module, as `rules.py`, `tailnet.py` and `mutation.py` did |"
+    checks = "| `ci_workflows/checks.py` | The CLI entry point and the code-coverage gates: `changed-lines`, `floor`, `select-functions`, `survivors`, `filter-sources` and `source-paths`; it also parses `rehearse`, `mutation-plan`, `mutation-merge`, `mutation-config` and `mutation-checks`, hands them to their owning modules, and runs the survivors gate on the results `mutation-checks` merges. | Grow another kind of check; a new kind gets its own module, as `rules.py`, `tailnet.py` and `mutation.py` did |"
     mutation = "| `ci_workflows/mutation.py` | Loading mutmut 3.8.0 for every command that needs it, listing a file's mutant names, planning a run's shards (`mutation-plan`), merging shards' results (`mutation-merge`), writing `only_mutate` (`mutation-config`), and judging the merging job's needed jobs before its survivors are checked (`mutation-checks`). | Judge survivors; the survivors gate in `checks.py` does |"
     assert rows[rows.index(checks) + 1] == mutation
 
